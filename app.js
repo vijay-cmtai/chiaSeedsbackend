@@ -12,7 +12,7 @@ console.log(
 );
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN, 
+    origin: "https://chiaseedsfront.vercel.app", 
     credentials: true,
   })
 );
