@@ -1,5 +1,3 @@
-// src/server.js (FINAL VERSION - WORKS LOCALLY AND ON VERCEL)
-
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -16,6 +14,8 @@ dotenv.config({
 // Connect to the database
 connectDB();
 
+// ✅ This logic is perfect:
+// It only runs app.listen() when NOT on Vercel
 if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 8000;
   app.listen(PORT, () => {
@@ -23,4 +23,6 @@ if (!process.env.VERCEL) {
   });
 }
 
+// ✅ This logic is also perfect:
+// It exports the 'app' object, which is exactly what Vercel needs.
 export default app;
