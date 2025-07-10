@@ -12,7 +12,7 @@ console.log(
 );
 app.use(
   cors({
-    origin: "https://chiaseedsfront.vercel.app", "https://www.naraaglobal.com"
+     origin: ["https://chiaseedsfront.vercel.app", "https://www.naraaglobal.com"],
     credentials: true,
   })
 );
