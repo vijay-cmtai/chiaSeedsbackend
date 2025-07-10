@@ -5,6 +5,7 @@ import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import { Product } from "../models/product.model.js";
 import { uploadOnCloudinary } from "../config/cloudinary.js";
+import fs from "fs"; // ✅ IMPORTANT: Import 'fs' for file cleanup
 
 const getUserDashboardStats = asyncHandler(async (req, res) => {
   const [pendingOrdersCount, user] = await Promise.all([
@@ -89,26 +90,34 @@ const updateMyProfile = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, updatedUser, "Profile updated successfully"));
 });
 
+// ✅ FIXED: This function now includes a 'finally' block to clean up temporary files.
 const updateUserAvatar = asyncHandler(async (req, res) => {
   const avatarLocalPath = req.file?.path;
   if (!avatarLocalPath) {
     throw new ApiError(400, "Avatar file is missing");
   }
 
-  const avatar = await uploadOnCloudinary(avatarLocalPath);
-  if (!avatar?.url) {
-    throw new ApiError(500, "Error while uploading avatar to Cloudinary");
+  try {
+    const avatar = await uploadOnCloudinary(avatarLocalPath);
+    if (!avatar?.url) {
+      throw new ApiError(500, "Error while uploading avatar to Cloudinary");
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: { avatar: avatar.url } },
+      { new: true }
+    ).select("-password");
+
+    res
+      .status(200)
+      .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
+  } finally {
+    // This block will always execute, ensuring the temp file is deleted.
+    if (fs.existsSync(avatarLocalPath)) {
+      fs.unlinkSync(avatarLocalPath); // Delete the local file from the /tmp directory
+    }
   }
-
-  const updatedUser = await User.findByIdAndUpdate(
-    req.user._id,
-    { $set: { avatar: avatar.url } },
-    { new: true }
-  ).select("-password");
-
-  res
-    .status(200)
-    .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
 });
 
 const getAddresses = asyncHandler(async (req, res) => {
@@ -211,7 +220,6 @@ const deleteAddress = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, user.addresses, "Address deleted successfully"));
 });
 
-// --- Wishlist Controller ---
 const getWishlist = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id)
     .populate({
@@ -271,7 +279,6 @@ const removeFromWishlist = asyncHandler(async (req, res) => {
     );
 });
 
-// --- Cart Controllers ---
 const getCart = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id)
     .populate({
@@ -393,7 +400,6 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, updatedUser.cart, "Cart quantity updated"));
 });
 
-// --- Order Controllers ---
 const placeOrder = asyncHandler(async (req, res) => {
   const { addressId } = req.body;
   const userId = req.user._id;
@@ -423,15 +429,12 @@ const placeOrder = asyncHandler(async (req, res) => {
   for (const item of user.cart) {
     const product = item.product;
 
-    // Fix 1: Check if product exists in DB (not deleted)
     if (!product) {
       throw new ApiError(
         400,
         `A product in your cart is no longer available. Please remove it and try again.`
       );
     }
-
-    // Fix 2: Check for sufficient stock
     if (product.stock < item.quantity) {
       throw new ApiError(
         400,
@@ -440,8 +443,6 @@ const placeOrder = asyncHandler(async (req, res) => {
     }
 
     totalPrice += product.price * item.quantity;
-
-    // Fix 3: Add the 'name' field to match the Order schema
     orderItems.push({
       name: product.name,
       product: product._id,
