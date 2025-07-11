@@ -1,3 +1,5 @@
+// src/controllers/payment.controller.js (CORRECTED CODE)
+
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -12,6 +14,8 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+
+// === YAHAN PAR CHANGE KIYA GAYA HAI ===
 const createRazorpayOrder = asyncHandler(async (req, res) => {
     const { addressId } = req.body;
     const userId = req.user._id;
@@ -26,15 +30,16 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Your cart is empty. Cannot create an order.");
     }
 
-    const shippingAddress = user.addresses.id(addressId);
-    if (!shippingAddress) {
-        throw new ApiError(404, "Shipping address not found in your profile.");
-    }
+    // Isko alag se nikalne ki zaroorat nahi, kyunki user object me pehle se hai.
+    // const shippingAddress = user.addresses.id(addressId);
+    // if (!shippingAddress) { ... }
 
     let totalPrice = 0;
     for (const item of user.cart) {
         if (!item.product) {
-            throw new ApiError(400, "A product in your cart is no longer available. Please remove it.");
+            // Hum is item ko ignore kar sakte hain ya error bhej sakte hain.
+            // Abhi ke liye, error bejna behtar hai.
+            throw new ApiError(400, `A product in your cart is no longer available. Please remove it to continue.`);
         }
         if (item.product.stock < item.quantity) {
             throw new ApiError(400, `Not enough stock for "${item.product.name}". Only ${item.product.stock} available.`);
@@ -43,7 +48,7 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
     }
 
     const options = {
-        amount: Number(totalPrice * 100),
+        amount: Math.round(totalPrice * 100), // Amount in paise
         currency: "INR",
         receipt: crypto.randomBytes(10).toString("hex"),
     };
@@ -54,12 +59,24 @@ const createRazorpayOrder = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Something went wrong while creating the Razorpay order.");
     }
     
+    // Frontend ko zaroori details bhejein taaki woh Razorpay popup khol sake
+    const responsePayload = {
+        orderId: razorpayOrder.id,
+        currency: razorpayOrder.currency,
+        amount: razorpayOrder.amount,
+        key: process.env.RAZORPAY_KEY_ID, // Frontend ko key bhejna zaroori hai
+        addressId: addressId // addressId ko wapas bhejein taaki verification ke samay kaam aaye
+    };
+
     res.status(200).json(
-        new ApiResponse(200, razorpayOrder, "Razorpay order created successfully")
+        new ApiResponse(200, responsePayload, "Razorpay order created successfully")
     );
 });
 
+
 const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
+    // Is function mein koi badlav ki zaroorat nahi hai. Yeh bilkul sahi hai.
+    // ...
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, addressId } = req.body;
     const userId = req.user._id;
 
@@ -78,10 +95,12 @@ const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Your cart is empty. Cannot place the order.");
     }
     
-    const shippingAddress = user.addresses.id(addressId);
-    if (!shippingAddress) {
+    const shippingAddressObject = user.addresses.id(addressId);
+    if (!shippingAddressObject) {
         throw new ApiError(404, "Shipping address not found.");
     }
+    const shippingAddress = shippingAddressObject.toObject();
+
 
     let totalPrice = 0;
     const orderItems = [];
@@ -94,6 +113,7 @@ const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
             product: item.product._id,
             quantity: item.quantity,
             price: item.product.price,
+            mainImage: item.product.mainImage // Main image bhi save karein
         });
         productStockUpdates.push({
             updateOne: {
@@ -106,12 +126,15 @@ const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     const newOrder = await Order.create({
         user: userId,
         orderItems,
-        shippingAddress: shippingAddress.toObject(),
+        shippingAddress,
         totalPrice,
-        orderStatus: "Paid",
-        paymentId: razorpay_payment_id,
-        razorpayOrderId: razorpay_order_id,
-        paymentMethod: "Razorpay",
+        paymentDetails: { // Payment details ko ek object me rakhein
+            paymentId: razorpay_payment_id,
+            orderId: razorpay_order_id,
+            signature: razorpay_signature,
+            method: "Razorpay",
+            status: "Paid",
+        },
     });
 
     if (!newOrder) {
