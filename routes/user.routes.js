@@ -1,6 +1,4 @@
 import { Router } from "express";
-import { authMiddleware } from "../middlewares/auth.middleware.js";
-import { upload } from "../middlewares/multer.middleware.js";
 import {
   getUserDashboardStats,
   getRecentUserOrders,
@@ -14,44 +12,52 @@ import {
   getWishlist,
   addToWishlist,
   removeFromWishlist,
-  placeOrder,
-  getMyOrders,
-  getSingleOrder,
-  // Cart controllers ko import karein
   getCart,
   addToCart,
   removeFromCart,
   updateCartQuantity,
+  placeOrder,
+  getMyOrders,
+  getSingleOrder,
 } from "../controllers/user.controller.js";
+// NOTE: Make sure the name of your auth middleware is correct.
+// In your controller, it's named 'protect'. Here it's 'authMiddleware'.
+// I will use 'authMiddleware' as defined in this file.
+import { authMiddleware } from "../middlewares/auth.middleware.js";
+import { upload } from "../middlewares/multer.middleware.js";
 
 const router = Router();
 
-// Apply auth middleware to all routes in this file
+// This middleware requires the user to be authenticated for all subsequent routes.
 router.use(authMiddleware);
 
-// --- Dashboard & Profile Routes ---
-router.route("/dashboard").get(getUserDashboardStats);
-router.route("/profile").get(getMyProfile).put(updateMyProfile);
-router.route("/avatar").patch(upload.single("avatar"), updateUserAvatar);
+// =================== FIX IS HERE ===================
+// Dashboard routes must match the frontend API calls exactly.
+router.route("/dashboard/stats").get(getUserDashboardStats); // Changed from "/dashboard-stats"
+router.route("/orders/recent").get(getRecentUserOrders);   // Changed from "/recent-orders"
+// ===================================================
 
-// --- Address Routes ---
-router.route("/addresses").get(getAddresses).post(addAddress);
-router.route("/addresses/:addressId").put(updateAddress).delete(deleteAddress);
+// Profile
+router.route("/profile").get(getMyProfile).patch(updateMyProfile);
+router
+  .route("/profile/avatar")
+  .patch(upload.single("avatar"), updateUserAvatar);
 
-// --- Wishlist Routes ---
+// Address
+router.route("/address").get(getAddresses).post(addAddress);
+router.route("/address/:addressId").patch(updateAddress).delete(deleteAddress);
+
+// Wishlist
 router.route("/wishlist").get(getWishlist).post(addToWishlist);
 router.route("/wishlist/:productId").delete(removeFromWishlist);
 
-// === NEW: Cart Routes ===
+// Cart
 router.route("/cart").get(getCart).post(addToCart);
-router
-  .route("/cart/:productId")
-  .delete(removeFromCart)
-  .patch(updateCartQuantity);
+router.route("/cart/:cartItemId").delete(removeFromCart);
+router.route("/cart/quantity/:productId").patch(updateCartQuantity);
 
-// --- Orders Routes ---
+// Orders
 router.route("/orders").get(getMyOrders).post(placeOrder);
-router.route("/orders/recent").get(getRecentUserOrders);
 router.route("/orders/:orderId").get(getSingleOrder);
 
 export default router;
