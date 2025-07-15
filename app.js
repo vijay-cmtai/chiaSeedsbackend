@@ -10,7 +10,7 @@ console.log(
 );
 app.use(
   cors({
-    origin:"http://localhost:3036", 
+    origin:["http://localhost:3036","https://www.naraaglobal.com"]
     credentials: true,
   })
 );
