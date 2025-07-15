@@ -45,8 +45,18 @@ const getSalesOverview = asyncHandler(async (req, res) => {
     { $sort: { "_id.month": 1 } },
   ]);
   const monthNames = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
   ];
   const monthlySales = Array.from({ length: 12 }, (_, i) => ({
     name: monthNames[i],
@@ -73,9 +83,34 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
 });
 
 const createProduct = asyncHandler(async (req, res) => {
-  const { name, description, price, stock, category } = req.body;
-  if ([name, description, price, stock, category].some((f) => !f || String(f).trim() === "")) {
-    throw new ApiError(400, "All product fields are required");
+  const {
+    name,
+    description,
+    price,
+    stock,
+    category,
+    weight,
+    length,
+    breadth,
+    height,
+  } = req.body;
+
+  const requiredFields = [
+    name,
+    description,
+    price,
+    stock,
+    category,
+    weight,
+    length,
+    breadth,
+    height,
+  ];
+  if (requiredFields.some((f) => !f || String(f).trim() === "")) {
+    throw new ApiError(
+      400,
+      "All product fields, including weight and dimensions, are required"
+    );
   }
 
   const imageLocalPaths = req.files?.map((file) => file.path);
@@ -83,7 +118,9 @@ const createProduct = asyncHandler(async (req, res) => {
     throw new ApiError(400, "At least one product image is required");
   }
 
-  const uploadPromises = imageLocalPaths.map((path) => uploadOnCloudinary(path));
+  const uploadPromises = imageLocalPaths.map((path) =>
+    uploadOnCloudinary(path)
+  );
   const uploadResults = await Promise.all(uploadPromises);
   const imageUrls = uploadResults.map((result) => result?.url).filter(Boolean);
   if (imageUrls.length !== imageLocalPaths.length) {
@@ -91,7 +128,17 @@ const createProduct = asyncHandler(async (req, res) => {
   }
 
   const product = await Product.create({
-    name, description, price, stock, category,
+    name,
+    description,
+    price: parseFloat(price),
+    stock: parseInt(stock, 10),
+    category,
+    weight: parseFloat(weight),
+    dimensions: {
+      length: parseFloat(length),
+      breadth: parseFloat(breadth),
+      height: parseFloat(height),
+    },
     images: imageUrls,
     mainImage: imageUrls[0],
   });
@@ -100,7 +147,9 @@ const createProduct = asyncHandler(async (req, res) => {
     throw new ApiError(500, "Something went wrong while creating the product");
   }
 
-  return res.status(201).json(new ApiResponse(201, product, "Product created successfully"));
+  return res
+    .status(201)
+    .json(new ApiResponse(201, product, "Product created successfully"));
 });
 
 const updateProduct = asyncHandler(async (req, res) => {
@@ -109,10 +158,31 @@ const updateProduct = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid product ID");
   }
 
-  const { name, description, price, stock, category } = req.body;
+  const {
+    name,
+    description,
+    price,
+    stock,
+    category,
+    weight,
+    length,
+    breadth,
+    height,
+  } = req.body;
+
+  const updateData = {
+    name,
+    description,
+    price,
+    stock,
+    category,
+    weight,
+    dimensions: { length, breadth, height },
+  };
+
   const product = await Product.findByIdAndUpdate(
     productId,
-    { $set: { name, description, price, stock, category } },
+    { $set: updateData },
     { new: true, runValidators: true }
   );
 
@@ -120,7 +190,9 @@ const updateProduct = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Product not found");
   }
 
-  return res.status(200).json(new ApiResponse(200, product, "Product updated successfully"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, product, "Product updated successfully"));
 });
 
 const deleteProduct = asyncHandler(async (req, res) => {
@@ -128,23 +200,29 @@ const deleteProduct = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(productId)) {
     throw new ApiError(400, "Invalid product ID");
   }
-
   const product = await Product.findByIdAndDelete(productId);
   if (!product) {
     throw new ApiError(404, "Product not found");
   }
-
-  return res.status(200).json(new ApiResponse(200, {}, "Product deleted successfully"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "Product deleted successfully"));
 });
 
 const getAllProducts = asyncHandler(async (req, res) => {
   const products = await Product.find({});
-  return res.status(200).json(new ApiResponse(200, products, "All products fetched"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, products, "All products fetched"));
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
-  const users = await User.find({ role: "user" }).select("-password -otp -refreshToken -forgotPasswordToken");
-  return res.status(200).json(new ApiResponse(200, users, "All users fetched successfully"));
+  const users = await User.find({ role: "user" }).select(
+    "-password -otp -refreshToken -forgotPasswordToken"
+  );
+  return res
+    .status(200)
+    .json(new ApiResponse(200, users, "All users fetched successfully"));
 });
 
 const getUserDetails = asyncHandler(async (req, res) => {
@@ -152,11 +230,15 @@ const getUserDetails = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(userId)) {
     throw new ApiError(400, "Invalid user ID");
   }
-  const user = await User.findById(userId).select("-password -otp -refreshToken -forgotPasswordToken");
+  const user = await User.findById(userId).select(
+    "-password -otp -refreshToken -forgotPasswordToken"
+  );
   if (!user) {
     throw new ApiError(404, "User not found");
   }
-  return res.status(200).json(new ApiResponse(200, user, "User details fetched successfully"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, user, "User details fetched successfully"));
 });
 
 const getUserOrders = asyncHandler(async (req, res) => {
@@ -164,47 +246,55 @@ const getUserOrders = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(userId)) {
     throw new ApiError(400, "Invalid user ID");
   }
-  const orders = await Order.find({ user: userId }).populate("orderItems.product", "name price");
-  return res.status(200).json(new ApiResponse(200, orders, `Orders for user fetched successfully`));
+  const orders = await Order.find({ user: userId }).populate(
+    "orderItems.product",
+    "name price"
+  );
+  return res
+    .status(200)
+    .json(new ApiResponse(200, orders, `Orders for user fetched successfully`));
 });
 
 const getAllAdminOrders = asyncHandler(async (req, res) => {
-  const orders = await Order.find({}).populate("user", "name").sort({ createdAt: -1 });
-  return res.status(200).json(new ApiResponse(200, orders, "All orders fetched"));
+  const orders = await Order.find({})
+    .populate("user", "name")
+    .sort({ createdAt: -1 });
+  return res
+    .status(200)
+    .json(new ApiResponse(200, orders, "All orders fetched"));
 });
 
-
-// ==========================================================
-// === THIS IS THE CORRECTED FUNCTION ===
-// ==========================================================
 const updateOrderStatus = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   const { status } = req.body;
-
   if (!mongoose.Types.ObjectId.isValid(orderId)) {
     throw new ApiError(400, "Invalid Order ID");
   }
-
-  // Use the statuses from your Order model
-  const validStatuses = ["Pending", "Processing", "Shipped", "Completed", "Cancelled"];
+  const validStatuses = [
+    "Pending",
+    "Processing",
+    "Shipped",
+    "Delivered",
+    "Cancelled",
+  ];
   if (!status || !validStatuses.includes(status)) {
-    throw new ApiError(400, `Invalid status. Must be one of: ${validStatuses.join(", ")}`);
+    throw new ApiError(
+      400,
+      `Invalid status. Must be one of: ${validStatuses.join(", ")}`
+    );
   }
-
-  // Update the 'orderStatus' field, which is the correct name in your model
   const order = await Order.findByIdAndUpdate(
     orderId,
-    { $set: { orderStatus: status } }, // Use 'orderStatus' here
+    { $set: { orderStatus: status } },
     { new: true }
   ).populate("user", "name");
-
   if (!order) {
     throw new ApiError(404, "Order not found");
   }
-
-  return res.status(200).json(new ApiResponse(200, order, "Order status updated successfully"));
+  return res
+    .status(200)
+    .json(new ApiResponse(200, order, "Order status updated successfully"));
 });
-
 
 export {
   getAdminDashboardStats,

@@ -5,6 +5,8 @@ import { Order } from "../models/order.model.js";
 import { User } from "../models/user.model.js";
 import { Product } from "../models/product.model.js";
 import { uploadOnCloudinary } from "../config/cloudinary.js";
+import fs from "fs";
+import mongoose from "mongoose";
 
 const getUserDashboardStats = asyncHandler(async (req, res) => {
   const [pendingOrdersCount, user] = await Promise.all([
@@ -95,20 +97,26 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Avatar file is missing");
   }
 
-  const avatar = await uploadOnCloudinary(avatarLocalPath);
-  if (!avatar?.url) {
-    throw new ApiError(500, "Error while uploading avatar to Cloudinary");
+  try {
+    const avatar = await uploadOnCloudinary(avatarLocalPath);
+    if (!avatar?.url) {
+      throw new ApiError(500, "Error while uploading avatar to Cloudinary");
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: { avatar: avatar.url } },
+      { new: true }
+    ).select("-password");
+
+    res
+      .status(200)
+      .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
+  } finally {
+    if (fs.existsSync(avatarLocalPath)) {
+      fs.unlinkSync(avatarLocalPath);
+    }
   }
-
-  const updatedUser = await User.findByIdAndUpdate(
-    req.user._id,
-    { $set: { avatar: avatar.url } },
-    { new: true }
-  ).select("-password");
-
-  res
-    .status(200)
-    .json(new ApiResponse(200, updatedUser, "Avatar updated successfully"));
 });
 
 const getAddresses = asyncHandler(async (req, res) => {
@@ -128,31 +136,25 @@ const getAddresses = asyncHandler(async (req, res) => {
 });
 
 const addAddress = asyncHandler(async (req, res) => {
-  const { name, phone, type, street, city, state, postalCode, country } =
+  const { fullName, phone, type, street, city, state, postalCode, country } =
     req.body;
 
-  if (!name || !phone || !street || !city || !state || !postalCode) {
+  if (!fullName || !phone || !street || !city || !state || !postalCode) {
     throw new ApiError(400, "All required address fields must be provided.");
   }
 
   const user = await User.findById(req.user._id);
-
   const newAddress = {
-    name,
+    fullName,
     phone,
-    type,
+    type: type || "Home", // Default to "Home" if not provided
     street,
     city,
     state,
     postalCode,
     country: country || "India",
-    isDefault: false,
+    isDefault: user.addresses.length === 0, // Set as default if no addresses exist
   };
-
-  if (user.addresses.length === 0) {
-    newAddress.isDefault = true;
-  }
-
   user.addresses.push(newAddress);
   await user.save({ validateBeforeSave: false });
 
@@ -163,29 +165,25 @@ const addAddress = asyncHandler(async (req, res) => {
 
 const updateAddress = asyncHandler(async (req, res) => {
   const { addressId } = req.params;
-  const { name, phone, type, street, city, state, postalCode, country } =
+  const { fullName, phone, type, street, city, state, postalCode, country } =
     req.body;
 
-  if (!name || !phone || !street || !city || !state || !postalCode) {
+  if (!fullName || !phone || !street || !city || !state || !postalCode) {
     throw new ApiError(400, "All required address fields must be provided.");
   }
 
   const user = await User.findById(req.user._id);
   const addressToUpdate = user.addresses.id(addressId);
-
-  if (!addressToUpdate) {
-    throw new ApiError(404, "Address not found");
-  }
-
+  if (!addressToUpdate) throw new ApiError(404, "Address not found");
   addressToUpdate.set({
-    name,
+    fullName,
     phone,
-    type,
+    type: type || "Home", // Default to "Home" if not provided
     street,
     city,
     state,
     postalCode,
-    country,
+    country: country || "India",
   });
   await user.save({ validateBeforeSave: false });
 
@@ -201,25 +199,17 @@ const deleteAddress = asyncHandler(async (req, res) => {
     { $pull: { addresses: { _id: addressId } } },
     { new: true }
   );
-
-  if (!user) {
-    throw new ApiError(500, "Could not delete address");
-  }
+  if (!user) throw new ApiError(500, "Could not delete address");
 
   res
     .status(200)
     .json(new ApiResponse(200, user.addresses, "Address deleted successfully"));
 });
 
-// --- Wishlist Controller ---
 const getWishlist = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id)
-    .populate({
-      path: "wishlist",
-      select: "name price mainImage images stock",
-    })
+    .populate({ path: "wishlist", select: "name price mainImage images stock" })
     .select("wishlist");
-
   res
     .status(200)
     .json(
@@ -229,14 +219,10 @@ const getWishlist = asyncHandler(async (req, res) => {
 
 const addToWishlist = asyncHandler(async (req, res) => {
   const { productId } = req.body;
-  if (!productId) {
-    throw new ApiError(400, "Product ID is required");
-  }
-
+  if (!productId) throw new ApiError(400, "Product ID is required");
   await User.findByIdAndUpdate(req.user._id, {
     $addToSet: { wishlist: productId },
   });
-
   const updatedUser = await User.findById(req.user._id)
     .populate("wishlist")
     .select("wishlist");
@@ -256,7 +242,6 @@ const removeFromWishlist = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, {
     $pull: { wishlist: productId },
   });
-
   const updatedUser = await User.findById(req.user._id)
     .populate("wishlist")
     .select("wishlist");
@@ -271,7 +256,6 @@ const removeFromWishlist = asyncHandler(async (req, res) => {
     );
 });
 
-// --- Cart Controllers ---
 const getCart = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id)
     .populate({
@@ -281,10 +265,7 @@ const getCart = asyncHandler(async (req, res) => {
     .select("cart")
     .lean();
 
-  if (!user) {
-    throw new ApiError(404, "User not found");
-  }
-
+  if (!user) throw new ApiError(404, "User not found");
   res
     .status(200)
     .json(new ApiResponse(200, user.cart || [], "Cart fetched successfully"));
@@ -294,21 +275,14 @@ const addToCart = asyncHandler(async (req, res) => {
   const { productId, quantity = 1 } = req.body;
   const userId = req.user._id;
 
-  if (!productId) {
-    throw new ApiError(400, "Product ID is required");
-  }
-
+  if (!productId) throw new ApiError(400, "Product ID is required");
   const product = await Product.findById(productId);
-  if (!product) {
-    throw new ApiError(404, "Product not found");
-  }
-
-  if (product.stock < quantity) {
+  if (!product) throw new ApiError(404, "Product not found");
+  if (product.stock < quantity)
     throw new ApiError(
       400,
       `Not enough stock for ${product.name}. Only ${product.stock} left.`
     );
-  }
 
   const user = await User.findById(userId);
   const existingCartItemIndex = user.cart.findIndex(
@@ -322,7 +296,6 @@ const addToCart = asyncHandler(async (req, res) => {
   }
 
   await user.save({ validateBeforeSave: false });
-
   const updatedUser = await User.findById(userId)
     .populate("cart.product")
     .select("cart")
@@ -339,28 +312,29 @@ const addToCart = asyncHandler(async (req, res) => {
 });
 
 const removeFromCart = asyncHandler(async (req, res) => {
-  const { productId } = req.params;
+  const { cartItemId } = req.params;
   const userId = req.user._id;
 
-  if (!productId) {
-    throw new ApiError(400, "Product ID is required");
+  if (!mongoose.Types.ObjectId.isValid(cartItemId)) {
+    throw new ApiError(400, "Invalid Cart Item ID format.");
   }
 
   await User.findByIdAndUpdate(userId, {
-    $pull: { cart: { product: productId } },
+    $pull: { cart: { _id: cartItemId } },
   });
 
   const updatedUser = await User.findById(userId)
-    .populate("cart.product")
+    .populate("cart.product", "name price mainImage stock")
     .select("cart")
     .lean();
+
   res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        updatedUser.cart,
-        "Product removed from cart successfully"
+        updatedUser.cart || [],
+        "Item removed from cart successfully"
       )
     );
 });
@@ -370,14 +344,11 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
   const { quantity } = req.body;
   const userId = req.user._id;
 
-  if (!quantity || quantity < 1) {
+  if (!quantity || quantity < 1)
     throw new ApiError(400, "A valid quantity is required.");
-  }
 
   const user = await User.findOne({ _id: userId, "cart.product": productId });
-  if (!user) {
-    throw new ApiError(404, "Product not found in cart");
-  }
+  if (!user) throw new ApiError(404, "Product not found in cart");
 
   await User.updateOne(
     { _id: userId, "cart.product": productId },
@@ -393,28 +364,22 @@ const updateCartQuantity = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, updatedUser.cart, "Cart quantity updated"));
 });
 
-// --- Order Controllers ---
 const placeOrder = asyncHandler(async (req, res) => {
   const { addressId } = req.body;
   const userId = req.user._id;
 
-  if (!addressId) {
-    throw new ApiError(400, "Shipping address ID is required.");
-  }
-
+  if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
   const user = await User.findById(userId).populate({
     path: "cart.product",
     select: "name price stock",
   });
 
-  if (!user || !user.cart || user.cart.length === 0) {
+  if (!user || !user.cart || user.cart.length === 0)
     throw new ApiError(400, "Your cart is empty. Cannot place an order.");
-  }
 
   const shippingAddress = user.addresses.id(addressId);
-  if (!shippingAddress) {
+  if (!shippingAddress)
     throw new ApiError(404, "Shipping address not found in your profile.");
-  }
 
   let totalPrice = 0;
   const orderItems = [];
@@ -422,33 +387,24 @@ const placeOrder = asyncHandler(async (req, res) => {
 
   for (const item of user.cart) {
     const product = item.product;
-
-    // Fix 1: Check if product exists in DB (not deleted)
-    if (!product) {
+    if (!product)
       throw new ApiError(
         400,
         `A product in your cart is no longer available. Please remove it and try again.`
       );
-    }
-
-    // Fix 2: Check for sufficient stock
-    if (product.stock < item.quantity) {
+    if (product.stock < item.quantity)
       throw new ApiError(
         400,
         `Not enough stock for "${product.name}". Only ${product.stock} available.`
       );
-    }
 
     totalPrice += product.price * item.quantity;
-
-    // Fix 3: Add the 'name' field to match the Order schema
     orderItems.push({
       name: product.name,
       product: product._id,
       quantity: item.quantity,
       price: product.price,
     });
-
     productStockUpdates.push({
       updateOne: {
         filter: { _id: product._id },
@@ -470,12 +426,10 @@ const placeOrder = asyncHandler(async (req, res) => {
     totalPrice,
   });
 
-  if (!newOrder) {
+  if (!newOrder)
     throw new ApiError(500, "Something went wrong while placing the order.");
-  }
 
   await Product.bulkWrite(productStockUpdates);
-
   user.cart = [];
   await user.save({ validateBeforeSave: false });
 
@@ -486,13 +440,9 @@ const placeOrder = asyncHandler(async (req, res) => {
 
 const getMyOrders = asyncHandler(async (req, res) => {
   const orders = await Order.find({ user: req.user._id })
-    .populate({
-      path: "orderItems.product",
-      select: "name mainImage",
-    })
+    .populate({ path: "orderItems.product", select: "name mainImage" })
     .sort({ createdAt: -1 })
     .lean();
-
   res
     .status(200)
     .json(new ApiResponse(200, orders, "All user orders fetched successfully"));
@@ -501,19 +451,13 @@ const getMyOrders = asyncHandler(async (req, res) => {
 const getSingleOrder = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   const order = await Order.findOne({ _id: orderId, user: req.user._id })
-    .populate({
-      path: "orderItems.product",
-      select: "name mainImage price",
-    })
+    .populate({ path: "orderItems.product", select: "name mainImage price" })
     .lean();
-
-  if (!order) {
+  if (!order)
     throw new ApiError(
       404,
       "Order not found or you do not have permission to view it."
     );
-  }
-
   res
     .status(200)
     .json(new ApiResponse(200, order, "Order detail fetched successfully"));
