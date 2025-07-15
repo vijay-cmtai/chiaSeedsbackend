@@ -34,11 +34,7 @@ router.use(authMiddleware);
 // =================== FIX IS HERE ===================
 // Dashboard routes must match the frontend API calls exactly.
 router.route("/dashboard/stats").get(getUserDashboardStats); // Changed from "/dashboard-stats"
-<<<<<<< HEAD
 router.route("/orders/recent").get(getRecentUserOrders); // Changed from "/recent-orders"
-=======
-router.route("/orders/recent").get(getRecentUserOrders);   // Changed from "/recent-orders"
->>>>>>> aae50f6aa5bc484c2a91c0de27b296021196b22f
 // ===================================================
 
 // Profile
