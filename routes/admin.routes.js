@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+// src/routes/admin.routes.js (COMPLETE CORRECTED FILE)
+>>>>>>> aae50f6aa5bc484c2a91c0de27b296021196b22f
 
 import { Router } from "express";
 import {

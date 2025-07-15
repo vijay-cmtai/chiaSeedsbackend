@@ -10,7 +10,11 @@ console.log(
 );
 app.use(
   cors({
+<<<<<<< HEAD
     origin:"http://localhost:3036", 
+=======
+     origin: ["http://localhost:3036","https://chiaseedsfront.vercel.app", "https://www.naraaglobal.com"],
+>>>>>>> aae50f6aa5bc484c2a91c0de27b296021196b22f
     credentials: true,
   })
 );
@@ -20,4 +24,9 @@ app.use(express.static("public"));
 app.use(cookieParser());
 app.use("/api/v1", mainRouter);
 app.use(errorHandler);
+<<<<<<< HEAD
 export { app };
+=======
+
+export { app };
+>>>>>>> aae50f6aa5bc484c2a91c0de27b296021196b22f
