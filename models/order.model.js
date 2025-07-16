@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 
-// YAHI SABSE ZAROORI HISSA HAI
 const shippingAddressSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   phone: { type: String, required: true },
@@ -9,7 +8,7 @@ const shippingAddressSchema = new mongoose.Schema({
   state: { type: String, required: true },
   postalCode: { type: String, required: true },
   country: { type: String, required: true },
-  type: { type: String, default: "Home" }, // Yeh optional hai, lekin accha hai
+  type: { type: String, default: "Home" },
 });
 
 const orderSchema = new mongoose.Schema(
@@ -27,7 +26,6 @@ const orderSchema = new mongoose.Schema(
         },
       },
     ],
-    // --- YAHAN PURANE SCHEMA KO NAYE SCHEMA SE REPLACE KIYA GAYA HAI ---
     shippingAddress: {
       type: shippingAddressSchema,
       required: true,
@@ -44,7 +42,7 @@ const orderSchema = new mongoose.Schema(
         "Delivered",
         "Cancelled",
       ],
-      default: "Paid", // Default "Paid" kar diya, kyunki payment ke baad hi order banta hai
+      default: "Paid",
     },
     paymentId: { type: String },
     razorpayOrderId: { type: String },
@@ -52,12 +50,27 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ["COD", "Razorpay"],
       required: true,
-      default: "Razorpay", // Default "Razorpay" kar diya
+      default: "Razorpay",
     },
     shipmentDetails: {
       shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Shipment" },
       trackingNumber: { type: String },
       courier: { type: String },
+    },
+    // --- YEH DO FIELDS ADD KAREIN ---
+    refundDetails: {
+      refundId: String,
+      amount: Number,
+      status: String,
+      createdAt: Date,
+    },
+    cancellationDetails: {
+      cancelledBy: {
+        type: String,
+        enum: ["User", "Admin"],
+      },
+      reason: { type: String }, // Admin koi reason de sakta hai
+      cancellationDate: { type: Date },
     },
   },
   { timestamps: true }
