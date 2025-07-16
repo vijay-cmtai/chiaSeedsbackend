@@ -9,6 +9,7 @@ const generateOtp = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
 const registerUser = asyncHandler(async (req, res) => {
+  // Use fullName to match the frontend, even though the model uses fullName
   const { name, email, password, role } = req.body;
 
   if ([name, email, password].some((field) => !field || field.trim() === "")) {
@@ -18,11 +19,11 @@ const registerUser = asyncHandler(async (req, res) => {
   const userRole = role && role.toLowerCase() === "admin" ? "admin" : "user";
   const existingUser = await User.findOne({ email });
   const otp = generateOtp();
-  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
+  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   const emailHtml = `
     <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-      <h2>Welcome to Our Platform!</h2>
+      <h2>Welcome to Chia!</h2>
       <p>Hi ${name},</p>
       <p>Thank you for registering. Please use the following One-Time Password (OTP) to verify your email address. This OTP is valid for 10 minutes.</p>
       <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px; background-color: #f0f0f0; padding: 10px 20px; border-radius: 5px; display: inline-block;">
@@ -32,6 +33,21 @@ const registerUser = asyncHandler(async (req, res) => {
     </div>
   `;
 
+  // A helper function to send email safely without crashing the server
+  const sendVerificationEmail = async () => {
+    try {
+      await sendEmail(email, "Verify Your Email Address", emailHtml);
+      console.log(`✅ Verification email sent to ${email}`);
+    } catch (error) {
+      console.error(
+        `❌ Failed to send verification email to ${email}:`,
+        error.message
+      );
+      // We don't throw an error here, so user creation can continue.
+      // In a production app, you might add this to a retry queue.
+    }
+  };
+
   if (existingUser) {
     if (existingUser.isVerified) {
       throw new ApiError(
@@ -39,38 +55,52 @@ const registerUser = asyncHandler(async (req, res) => {
         "User with this email is already registered and verified."
       );
     }
+    // Update the existing unverified user
     existingUser.password = password;
+    existingUser.fullName = name; // 💡 FIX: Update fullName
     existingUser.otp = otp;
     existingUser.otpExpiry = otpExpiry;
     await existingUser.save({ validateBeforeSave: true });
 
-    await sendEmail(email, "Verify Your Email Address", emailHtml);
+    await sendVerificationEmail(); // Send email safely
 
     return res
       .status(200)
       .json(
         new ApiResponse(
           200,
-          {},
+          { email },
           "Account exists. A new OTP has been sent to your email."
         )
       );
   }
 
-  await User.create({ name, email, password, role: userRole, otp, otpExpiry });
+  // Create a new user
+  await User.create({
+    fullName: name, // 💡 FIX: Use 'name' from body for 'fullName' field
+    email,
+    password,
+    role: userRole,
+    otp,
+    otpExpiry,
+  });
 
-  await sendEmail(email, "Verify Your Email Address", emailHtml);
+  await sendVerificationEmail(); // Send email safely
 
   return res
     .status(201)
     .json(
       new ApiResponse(
         201,
-        {},
+        { email },
         "User registered successfully. Please check your email for the OTP."
       )
     );
 });
+
+// ... baaki sabhi functions (verifyOtp, loginUser, etc.) waise hi rahenge ...
+// ...
+// Is file mein baaki koi badlaav ki zaroorat nahi hai.
 
 const verifyOtp = asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
@@ -179,7 +209,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
   const emailHtml = `
     <div style="font-family: sans-serif; padding: 20px;">
       <h2>Password Reset Request</h2>
-      <p>Hi ${user.name},</p>
+      <p>Hi ${user.fullName},</p>
       <p>You requested a password reset. Please click the button below to reset your password. This link is valid for 10 minutes.</p>
       <a href="${resetUrl}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
         Reset Password
