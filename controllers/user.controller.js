@@ -147,13 +147,13 @@ const addAddress = asyncHandler(async (req, res) => {
   const newAddress = {
     fullName,
     phone,
-    type: type || "Home", // Default to "Home" if not provided
+    type: type || "Home",
     street,
     city,
     state,
     postalCode,
     country: country || "India",
-    isDefault: user.addresses.length === 0, // Set as default if no addresses exist
+    isDefault: user.addresses.length === 0,
   };
   user.addresses.push(newAddress);
   await user.save({ validateBeforeSave: false });
@@ -165,31 +165,50 @@ const addAddress = asyncHandler(async (req, res) => {
 
 const updateAddress = asyncHandler(async (req, res) => {
   const { addressId } = req.params;
-  const { fullName, phone, type, street, city, state, postalCode, country } =
-    req.body;
+  const updateData = req.body;
 
-  if (!fullName || !phone || !street || !city || !state || !postalCode) {
+  if (!mongoose.Types.ObjectId.isValid(addressId)) {
+    throw new ApiError(400, "Invalid Address ID format");
+  }
+
+  if (
+    !updateData.fullName ||
+    !updateData.phone ||
+    !updateData.street ||
+    !updateData.city ||
+    !updateData.state ||
+    !updateData.postalCode
+  ) {
     throw new ApiError(400, "All required address fields must be provided.");
   }
 
-  const user = await User.findById(req.user._id);
-  const addressToUpdate = user.addresses.id(addressId);
-  if (!addressToUpdate) throw new ApiError(404, "Address not found");
-  addressToUpdate.set({
-    fullName,
-    phone,
-    type: type || "Home", // Default to "Home" if not provided
-    street,
-    city,
-    state,
-    postalCode,
-    country: country || "India",
-  });
-  await user.save({ validateBeforeSave: false });
+  const updateFields = {};
+  for (const key in updateData) {
+    updateFields[`addresses.$[elem].${key}`] = updateData[key];
+  }
+
+  const updatedUser = await User.findByIdAndUpdate(
+    req.user._id,
+    { $set: updateFields },
+    {
+      arrayFilters: [{ "elem._id": new mongoose.Types.ObjectId(addressId) }],
+      new: true,
+    }
+  ).select("addresses");
+
+  if (!updatedUser) {
+    throw new ApiError(404, "Address not found or failed to update.");
+  }
 
   res
     .status(200)
-    .json(new ApiResponse(200, user.addresses, "Address updated successfully"));
+    .json(
+      new ApiResponse(
+        200,
+        updatedUser.addresses,
+        "Address updated successfully"
+      )
+    );
 });
 
 const deleteAddress = asyncHandler(async (req, res) => {
