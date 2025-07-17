@@ -15,6 +15,11 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+// --- Constants for Backend Calculation ---
+// These must match your frontend constants for validation to work.
+const DELIVERY_CHARGE = 99;
+const GST_RATE = 0.05; // 5%
+
 // --- HELPER FUNCTIONS ---
 
 const createDelhiveryShipment = async (order, totalWeight) => {
@@ -103,7 +108,7 @@ const cancelDelhiveryShipment = async (trackingNumber) => {
 const initiateRazorpayRefund = async (paymentId, amount) => {
   try {
     const refund = await razorpay.payments.refund(paymentId, {
-      amount: amount,
+      amount: amount, // Amount should be in paise
       speed: "normal",
       notes: { reason: "Order cancelled by customer or admin." },
     });
@@ -121,17 +126,22 @@ const initiateRazorpayRefund = async (paymentId, amount) => {
 // --- MAIN CONTROLLERS ---
 
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
-  const { addressId } = req.body;
+  // 1. Get the final amount calculated from the frontend
+  const { addressId, amount: frontendTotalAmount } = req.body;
   const userId = req.user._id;
 
   if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
+  if (!frontendTotalAmount || frontendTotalAmount <= 0) {
+    throw new ApiError(400, "Invalid total amount provided.");
+  }
 
   const user = await User.findById(userId).populate("cart.product");
   if (!user || !user.cart.length) {
     throw new ApiError(400, "Your cart is empty.");
   }
 
-  let total = 0;
+  // 2. Recalculate the total on the backend for SECURITY VALIDATION
+  let backendSubtotal = 0;
   for (const item of user.cart) {
     if (!item.product) {
       await User.findByIdAndUpdate(userId, {
@@ -142,15 +152,31 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     if (item.product.stock < item.quantity) {
       throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
     }
-    total += item.product.price * item.quantity;
+    backendSubtotal += item.product.price * item.quantity;
   }
 
-  if (total <= 0) {
+  const backendGstAmount = backendSubtotal * GST_RATE;
+  const backendTotalAmount =
+    backendSubtotal + backendGstAmount + DELIVERY_CHARGE;
+
+  // 3. Compare frontend amount with backend calculated amount (security check)
+  if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) {
+    // Allowing a 1 Rupee tolerance for rounding
+    console.error(
+      `Price Tampering Alert! Frontend: ${frontendTotalAmount}, Backend: ${backendTotalAmount}`
+    );
+    throw new ApiError(400, "Price mismatch. Please refresh and try again.");
+  }
+
+  // 4. Convert the secure, backend-calculated amount to paise for Razorpay
+  const amountInPaise = Math.round(backendTotalAmount * 100);
+
+  if (amountInPaise <= 0) {
     throw new ApiError(400, "Cart total is zero. Cannot proceed.");
   }
 
   const razorpayOrder = await razorpay.orders.create({
-    amount: total * 100,
+    amount: amountInPaise,
     currency: "INR",
     receipt: crypto.randomBytes(10).toString("hex"),
   });
@@ -217,7 +243,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     type: selectedAddress.type || "Home",
   };
 
-  let totalPrice = 0;
+  let subtotal = 0;
   let totalWeight = 0;
   const items = [];
   const stockOps = [];
@@ -229,7 +255,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         `Item "${item.product?.name}" is unavailable or out of stock.`
       );
     }
-    totalPrice += item.product.price * item.quantity;
+    subtotal += item.product.price * item.quantity;
     totalWeight += (item.product.weight || 0.5) * item.quantity;
     items.push({
       product: item.product._id,
@@ -247,11 +273,15 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   if (!items.length) throw new ApiError(400, "Cart is empty.");
 
+  // Calculate the final total price to store in the database
+  const gstAmount = subtotal * GST_RATE;
+  const finalTotalPrice = subtotal + gstAmount + DELIVERY_CHARGE;
+
   const newOrder = await Order.create({
     user: userId,
     orderItems: items,
     shippingAddress,
-    totalPrice,
+    totalPrice: finalTotalPrice, // Use the correct final total price
     paymentId: razorpay_payment_id,
     razorpayOrderId: razorpay_order_id,
     paymentMethod: "Razorpay",
@@ -307,11 +337,7 @@ export const cancelOrder = asyncHandler(async (req, res) => {
   }
 
   const order = await Order.findById(orderId);
-  if (!order) {
-    throw new ApiError(404, "Order not found.");
-  }
-
-  console.log("CANCELLING ORDER:", JSON.stringify(order, null, 2));
+  if (!order) throw new ApiError(404, "Order not found.");
 
   const isOwner = order.user.toString() === currentUser._id.toString();
   const isAdmin = currentUser.role === "admin";
@@ -328,14 +354,10 @@ export const cancelOrder = asyncHandler(async (req, res) => {
   }
 
   if (!order.paymentId) {
-    console.error(
-      `FATAL: Order ${orderId} is missing a paymentId. Cannot process refund.`
-    );
     order.orderStatus = "Cancelled";
     order.cancellationDetails = {
       cancelledBy: isAdmin ? "Admin" : "User",
-      reason:
-        "Cancelled, but automatic refund failed due to missing payment details.",
+      reason: "Cancelled, but refund failed due to missing payment details.",
       cancellationDate: new Date(),
     };
     await order.save({ validateBeforeSave: false });
@@ -350,7 +372,7 @@ export const cancelOrder = asyncHandler(async (req, res) => {
       await cancelDelhiveryShipment(order.shipmentDetails.trackingNumber);
     }
 
-    const refundAmountInPaisa = order.totalPrice * 100;
+    const refundAmountInPaisa = Math.round(order.totalPrice * 100);
     const refund = await initiateRazorpayRefund(
       order.paymentId,
       refundAmountInPaisa
@@ -445,7 +467,6 @@ export const retryShipment = asyncHandler(async (req, res) => {
   }
 });
 
-// Extra professional functions that are good to have
 export const getMyOrders = asyncHandler(async (req, res) => {
   const orders = await Order.find({ user: req.user._id })
     .populate("orderItems.product", "name mainImage")
@@ -471,7 +492,6 @@ export const getSingleOrderDetails = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Order not found.");
   }
 
-  // Security check: Either user is admin or owner of the order
   if (
     req.user.role !== "admin" &&
     order.user.toString() !== req.user._id.toString()
