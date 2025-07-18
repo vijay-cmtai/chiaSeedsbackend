@@ -82,13 +82,19 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, recentOrders, "Recent admin orders fetched"));
 });
 
+// --- YE FUNCTION UPDATE KIYA GAYA HAI ---
 const createProduct = asyncHandler(async (req, res) => {
   const {
     name,
     description,
     price,
+    originalPrice,
     stock,
     category,
+    // Naye fields ko body se liya gaya
+    packagingType,
+    seedType,
+    speciality,
     weight,
     length,
     breadth,
@@ -99,18 +105,20 @@ const createProduct = asyncHandler(async (req, res) => {
     name,
     description,
     price,
+    originalPrice,
     stock,
     category,
+    // Naye fields ki validation
+    packagingType,
+    seedType,
+    speciality,
     weight,
     length,
     breadth,
     height,
   ];
-  if (requiredFields.some((f) => !f || String(f).trim() === "")) {
-    throw new ApiError(
-      400,
-      "All product fields, including weight and dimensions, are required"
-    );
+  if (requiredFields.some((f) => f === undefined || String(f).trim() === "")) {
+    throw new ApiError(400, "All product fields are required");
   }
 
   const imageLocalPaths = req.files?.map((file) => file.path);
@@ -131,8 +139,13 @@ const createProduct = asyncHandler(async (req, res) => {
     name,
     description,
     price: parseFloat(price),
+    originalPrice: parseFloat(originalPrice),
     stock: parseInt(stock, 10),
     category,
+    // Naye fields ko database me save kiya gaya
+    packagingType,
+    seedType,
+    speciality,
     weight: parseFloat(weight),
     dimensions: {
       length: parseFloat(length),
@@ -152,6 +165,7 @@ const createProduct = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, product, "Product created successfully"));
 });
 
+// --- YE FUNCTION UPDATE KIYA GAYA HAI ---
 const updateProduct = asyncHandler(async (req, res) => {
   const { productId } = req.params;
   if (!mongoose.Types.ObjectId.isValid(productId)) {
@@ -162,8 +176,13 @@ const updateProduct = asyncHandler(async (req, res) => {
     name,
     description,
     price,
+    originalPrice,
     stock,
     category,
+    // Naye fields ko body se liya gaya
+    packagingType,
+    seedType,
+    speciality,
     weight,
     length,
     breadth,
@@ -174,8 +193,13 @@ const updateProduct = asyncHandler(async (req, res) => {
     name,
     description,
     price,
+    originalPrice,
     stock,
     category,
+    // Naye fields ko update data me add kiya gaya
+    packagingType,
+    seedType,
+    speciality,
     weight,
     dimensions: { length, breadth, height },
   };
