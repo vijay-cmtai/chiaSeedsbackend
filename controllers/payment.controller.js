@@ -15,14 +15,13 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// --- Constants for Backend Calculation ---
-// These must match your frontend constants for validation to work.
 const DELIVERY_CHARGE = 99;
-const GST_RATE = 0.05; // 5%
-
-// --- HELPER FUNCTIONS ---
+const GST_RATE = 0.05;
 
 const createDelhiveryShipment = async (order, totalWeight) => {
+  if (!process.env.DELIVERY_ONE_API_URL) {
+    throw new Error("Delhivery API URL is not defined in .env file.");
+  }
   const { shippingAddress } = order;
   const payload = {
     shipments: [
@@ -80,6 +79,12 @@ const createDelhiveryShipment = async (order, totalWeight) => {
 };
 
 const cancelDelhiveryShipment = async (trackingNumber) => {
+  if (!process.env.DELIVERY_ONE_API_URL) {
+    console.error(
+      "Delhivery API URL is not defined in .env file for cancellation."
+    );
+    return { success: false, message: "Delhivery API URL is not configured." };
+  }
   const url = `${process.env.DELIVERY_ONE_API_URL}/api/p/edit/`;
   const formData = `data=${JSON.stringify({ waybill: trackingNumber, cancellation: "true" })}`;
   try {
@@ -89,13 +94,7 @@ const cancelDelhiveryShipment = async (trackingNumber) => {
         "Content-Type": "application/x-www-form-urlencoded",
       },
     });
-    if (res.data.success) {
-      return { success: true, message: "Shipment cancellation request sent." };
-    }
-    return {
-      success: false,
-      message: res.data.remark || "Failed to cancel shipment.",
-    };
+    return res.data;
   } catch (error) {
     const errorMessage = error.response?.data?.message || error.message;
     return {
@@ -105,10 +104,12 @@ const cancelDelhiveryShipment = async (trackingNumber) => {
   }
 };
 
-const initiateRazorpayRefund = async (paymentId, amount) => {
+// **FIXED: Reverted to the correct Razorpay SDK method**
+const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
   try {
+    // This is the correct way to call the refund function
     const refund = await razorpay.payments.refund(paymentId, {
-      amount: amount, // Amount should be in paise
+      amount: amountInPaisa,
       speed: "normal",
       notes: { reason: "Order cancelled by customer or admin." },
     });
@@ -117,16 +118,14 @@ const initiateRazorpayRefund = async (paymentId, amount) => {
     if (error.error?.description?.includes("already been fully refunded")) {
       return { status: "processed", id: "already_refunded" };
     }
-    throw new Error(
-      `Refund failed: ${error.error?.description || error.message}`
-    );
+    const errorMessage = error.error
+      ? JSON.stringify(error.error)
+      : error.message;
+    throw new Error(`Refund failed: ${errorMessage}`);
   }
 };
 
-// --- MAIN CONTROLLERS ---
-
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
-  // 1. Get the final amount calculated from the frontend
   const { addressId, amount: frontendTotalAmount } = req.body;
   const userId = req.user._id;
 
@@ -140,7 +139,6 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Your cart is empty.");
   }
 
-  // 2. Recalculate the total on the backend for SECURITY VALIDATION
   let backendSubtotal = 0;
   for (const item of user.cart) {
     if (!item.product) {
@@ -155,20 +153,17 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     backendSubtotal += item.product.price * item.quantity;
   }
 
-  const backendGstAmount = backendSubtotal * GST_RATE;
+  const backendGstAmount = (backendSubtotal + DELIVERY_CHARGE) * GST_RATE;
   const backendTotalAmount =
-    backendSubtotal + backendGstAmount + DELIVERY_CHARGE;
+    backendSubtotal + DELIVERY_CHARGE + backendGstAmount;
 
-  // 3. Compare frontend amount with backend calculated amount (security check)
   if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) {
-    // Allowing a 1 Rupee tolerance for rounding
     console.error(
       `Price Tampering Alert! Frontend: ${frontendTotalAmount}, Backend: ${backendTotalAmount}`
     );
     throw new ApiError(400, "Price mismatch. Please refresh and try again.");
   }
 
-  // 4. Convert the secure, backend-calculated amount to paise for Razorpay
   const amountInPaise = Math.round(backendTotalAmount * 100);
 
   if (amountInPaise <= 0) {
@@ -273,15 +268,14 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   if (!items.length) throw new ApiError(400, "Cart is empty.");
 
-  // Calculate the final total price to store in the database
-  const gstAmount = subtotal * GST_RATE;
-  const finalTotalPrice = subtotal + gstAmount + DELIVERY_CHARGE;
+  const gstAmount = (subtotal + DELIVERY_CHARGE) * GST_RATE;
+  const finalTotalPrice = subtotal + DELIVERY_CHARGE + gstAmount;
 
   const newOrder = await Order.create({
     user: userId,
     orderItems: items,
     shippingAddress,
-    totalPrice: finalTotalPrice, // Use the correct final total price
+    totalPrice: finalTotalPrice,
     paymentId: razorpay_payment_id,
     razorpayOrderId: razorpay_order_id,
     paymentMethod: "Razorpay",
@@ -295,14 +289,15 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         orderId: newOrder._id,
         userId,
         trackingNumber: shipmentResult.trackingNumber,
-        status: shipmentResult.status,
-        courier: "Delhivery",
+        status: "PENDING", // Matching your Shipment model's enum
+        courier: "Delivery One",
+        shippingAddress: newOrder.shippingAddress,
       });
-      newOrder.orderStatus = "Shipped";
+      newOrder.orderStatus = "Processing";
       newOrder.shipmentDetails = {
         shipmentId: shipment._id,
         trackingNumber: shipmentResult.trackingNumber,
-        courier: "Delhivery",
+        courier: "Delivery One",
       };
       await newOrder.save({ validateBeforeSave: false });
     }
@@ -445,15 +440,15 @@ export const retryShipment = asyncHandler(async (req, res) => {
         orderId: order._id,
         userId: order.user,
         trackingNumber: result.trackingNumber,
-        status: result.status,
+        status: "PENDING",
         shippingAddress: order.shippingAddress,
-        courier: "Delhivery",
+        courier: "Delivery One",
       });
-      order.orderStatus = "Shipped";
+      order.orderStatus = "Processing";
       order.shipmentDetails = {
         shipmentId: newShipment._id,
         trackingNumber: result.trackingNumber,
-        courier: "Delhivery",
+        courier: "Delivery One",
       };
       await order.save({ validateBeforeSave: false });
       res
