@@ -59,10 +59,23 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const verifyOtp = asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
-  if (!email || !otp) throw new ApiError(400, "Email and OTP are required");
+  if (!email || !otp) {
+    console.error("Missing email or OTP:", { email, otp });
+    throw new ApiError(400, "Email and OTP are required");
+  }
 
-  const user = await User.findOne({ email, otp, otpExpiry: { $gt: Date.now() } });
-  if (!user) throw new ApiError(400, "Invalid or expired OTP.");
+  console.log("Received OTP verification request:", { email, otp }); // Debug log
+
+  const user = await User.findOne({
+    email,
+    otp,
+    otpExpiry: { $gt: Date.now() },
+  }).select("+otp +otpExpiry");
+
+  if (!user) {
+    console.error("OTP verification failed: Invalid or expired OTP for email", email);
+    throw new ApiError(400, "Invalid or expired OTP.");
+  }
 
   user.isVerified = true;
   user.otp = undefined;
@@ -71,10 +84,18 @@ const verifyOtp = asyncHandler(async (req, res) => {
 
   const accessToken = user.generateAccessToken();
   const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
-  const options = { httpOnly: true, secure: process.env.NODE_ENV === "production" };
 
-  return res.status(200).cookie("accessToken", accessToken, options)
-    .json(new ApiResponse(200, { user: loggedInUser, accessToken }, "Email verified. You are now logged in."));
+  const options = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, options)
+    .json(
+      new ApiResponse(200, { user: loggedInUser, accessToken }, "Email verified. You are now logged in.")
+    );
 });
 
 const loginUser = asyncHandler(async (req, res) => {
@@ -96,7 +117,6 @@ const loginUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, { user: loggedInUser, accessToken }, "User logged in successfully"));
 });
 
-// --- FIX: Corrected forgotPassword function with actual HTML content ---
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -115,7 +135,6 @@ const forgotPassword = asyncHandler(async (req, res) => {
 
   const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
-  // This is the corrected HTML content for the email
   const emailHtml = `
     <div style="font-family: sans-serif; text-align: center; padding: 20px; border: 1px solid #ddd; border-radius: 10px; max-width: 600px; margin: auto;">
       <h2 style="color: #333;">Password Reset Request</h2>
