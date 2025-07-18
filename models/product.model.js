@@ -1,26 +1,32 @@
-// src/models/product.model.js
-
 import mongoose from "mongoose";
 
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     description: { type: String, required: true },
+
+    // Asli daam (MRP) aur Discounted daam (Selling Price)
+    originalPrice: { type: Number, required: true },
     price: { type: Number, required: true },
+
     stock: { type: Number, required: true, default: 0 },
     category: { type: String, required: true },
+
+    // --- YE NAYE FIELDS ADD KIYE GAYE HAIN ---
+    packagingType: { type: String, required: true },
+    seedType: { type: String, required: true },
+    speciality: { type: String, required: true },
+
     mainImage: { type: String, required: true },
     images: [{ type: String }],
     isPublished: { type: Boolean, default: true },
 
-    // --- NAYE FIELDS ADD KIYE GAYE HAIN ---
-    // Weight in kilograms (kg)
+    // Shipping ke liye zaroori fields waise hi rakhe gaye hain
     weight: {
       type: Number,
       required: [true, "Product weight is required for shipping"],
-      default: 0.5, // Default weight 0.5 kg (500g)
+      default: 0.5,
     },
-    // Dimensions in centimeters (cm)
     dimensions: {
       length: { type: Number, required: true, default: 10 },
       breadth: { type: Number, required: true, default: 10 },
