@@ -45,18 +45,7 @@ const getSalesOverview = asyncHandler(async (req, res) => {
     { $sort: { "_id.month": 1 } },
   ]);
   const monthNames = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   ];
   const monthlySales = Array.from({ length: 12 }, (_, i) => ({
     name: monthNames[i],
@@ -82,40 +71,15 @@ const getRecentAdminOrders = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, recentOrders, "Recent admin orders fetched"));
 });
 
-// --- YE FUNCTION UPDATE KIYA GAYA HAI ---
 const createProduct = asyncHandler(async (req, res) => {
   const {
-    name,
-    description,
-    price,
-    originalPrice,
-    stock,
-    category,
-    // Naye fields ko body se liya gaya
-    packagingType,
-    seedType,
-    speciality,
-    weight,
-    length,
-    breadth,
-    height,
+    name, description, price, originalPrice, stock, category,
+    packagingType, seedType, speciality, weight, length, breadth, height,
   } = req.body;
 
   const requiredFields = [
-    name,
-    description,
-    price,
-    originalPrice,
-    stock,
-    category,
-    // Naye fields ki validation
-    packagingType,
-    seedType,
-    speciality,
-    weight,
-    length,
-    breadth,
-    height,
+    name, description, price, originalPrice, stock, category,
+    packagingType, seedType, speciality, weight, length, breadth, height,
   ];
   if (requiredFields.some((f) => f === undefined || String(f).trim() === "")) {
     throw new ApiError(400, "All product fields are required");
@@ -142,7 +106,6 @@ const createProduct = asyncHandler(async (req, res) => {
     originalPrice: parseFloat(originalPrice),
     stock: parseInt(stock, 10),
     category,
-    // Naye fields ko database me save kiya gaya
     packagingType,
     seedType,
     speciality,
@@ -165,7 +128,6 @@ const createProduct = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, product, "Product created successfully"));
 });
 
-// --- YE FUNCTION UPDATE KIYA GAYA HAI ---
 const updateProduct = asyncHandler(async (req, res) => {
   const { productId } = req.params;
   if (!mongoose.Types.ObjectId.isValid(productId)) {
@@ -173,36 +135,30 @@ const updateProduct = asyncHandler(async (req, res) => {
   }
 
   const {
-    name,
-    description,
-    price,
-    originalPrice,
-    stock,
-    category,
-    // Naye fields ko body se liya gaya
-    packagingType,
-    seedType,
-    speciality,
-    weight,
-    length,
-    breadth,
-    height,
+    name, description, price, originalPrice, stock, category,
+    packagingType, seedType, speciality, weight, length, breadth, height,
   } = req.body;
-
+  
   const updateData = {
-    name,
-    description,
-    price,
-    originalPrice,
-    stock,
-    category,
-    // Naye fields ko update data me add kiya gaya
-    packagingType,
-    seedType,
-    speciality,
-    weight,
+    name, description, price, originalPrice, stock, category,
+    packagingType, seedType, speciality, weight,
     dimensions: { length, breadth, height },
   };
+
+  if (req.files && req.files.length > 0) {
+    const imageLocalPaths = req.files.map((file) => file.path);
+    
+    const uploadPromises = imageLocalPaths.map((path) => uploadOnCloudinary(path));
+    const uploadResults = await Promise.all(uploadPromises);
+    const newImageUrls = uploadResults.map((result) => result?.url).filter(Boolean);
+
+    if (newImageUrls.length !== imageLocalPaths.length) {
+      throw new ApiError(500, "Failed to upload one or more new images");
+    }
+
+    updateData.images = newImageUrls;
+    updateData.mainImage = newImageUrls[0];
+  }
 
   const product = await Product.findByIdAndUpdate(
     productId,
@@ -295,11 +251,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid Order ID");
   }
   const validStatuses = [
-    "Pending",
-    "Processing",
-    "Shipped",
-    "Delivered",
-    "Cancelled",
+    "Pending", "Processing", "Shipped", "Delivered", "Cancelled",
   ];
   if (!status || !validStatuses.includes(status)) {
     throw new ApiError(
