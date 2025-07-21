@@ -1,3 +1,5 @@
+// your-project/backend/src/controllers/order.controller.js
+
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import axios from "axios";
@@ -15,8 +17,28 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-const DELIVERY_CHARGE = 99;
 const GST_RATE = 0.05;
+
+/**
+ * Shipping charge calculate karne ke liye function.
+ * Yeh aapki requirement ko poora karta hai.
+ * 1 item = 99
+ * 2 items = 99 + (1 * 70) = 169
+ * 3 items = 99 + (2 * 70) = 239
+ * @param {number} totalQuantity - Cart mein sabhi products ki total quantity.
+ * @returns {number} The calculated shipping charge.
+ */
+const calculateShippingCharge = (totalQuantity) => {
+  if (totalQuantity <= 0) {
+    return 0;
+  }
+  if (totalQuantity === 1) {
+    return 99;
+  }
+  const baseCharge = 99;
+  const additionalItemCharge = 70;
+  return baseCharge + (totalQuantity - 1) * additionalItemCharge;
+};
 
 const createDelhiveryShipment = async (order, totalWeight) => {
   if (!process.env.DELIVERY_ONE_API_URL) {
@@ -104,10 +126,8 @@ const cancelDelhiveryShipment = async (trackingNumber) => {
   }
 };
 
-// **FIXED: Reverted to the correct Razorpay SDK method**
 const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
   try {
-    // This is the correct way to call the refund function
     const refund = await razorpay.payments.refund(paymentId, {
       amount: amountInPaisa,
       speed: "normal",
@@ -140,6 +160,8 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   }
 
   let backendSubtotal = 0;
+  let totalQuantity = 0;
+
   for (const item of user.cart) {
     if (!item.product) {
       await User.findByIdAndUpdate(userId, {
@@ -151,11 +173,13 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
       throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
     }
     backendSubtotal += item.product.price * item.quantity;
+    totalQuantity += item.quantity;
   }
 
-  const backendGstAmount = (backendSubtotal + DELIVERY_CHARGE) * GST_RATE;
+  const shippingCharge = calculateShippingCharge(totalQuantity);
+  const backendGstAmount = (backendSubtotal + shippingCharge) * GST_RATE;
   const backendTotalAmount =
-    backendSubtotal + DELIVERY_CHARGE + backendGstAmount;
+    backendSubtotal + shippingCharge + backendGstAmount;
 
   if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1) {
     console.error(
@@ -240,6 +264,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   let subtotal = 0;
   let totalWeight = 0;
+  let totalQuantity = 0;
   const items = [];
   const stockOps = [];
 
@@ -252,6 +277,8 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     }
     subtotal += item.product.price * item.quantity;
     totalWeight += (item.product.weight || 0.5) * item.quantity;
+    totalQuantity += item.quantity;
+
     items.push({
       product: item.product._id,
       name: item.product.name,
@@ -268,8 +295,9 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   if (!items.length) throw new ApiError(400, "Cart is empty.");
 
-  const gstAmount = (subtotal + DELIVERY_CHARGE) * GST_RATE;
-  const finalTotalPrice = subtotal + DELIVERY_CHARGE + gstAmount;
+  const shippingCharge = calculateShippingCharge(totalQuantity);
+  const gstAmount = (subtotal + shippingCharge) * GST_RATE;
+  const finalTotalPrice = subtotal + shippingCharge + gstAmount;
 
   const newOrder = await Order.create({
     user: userId,
@@ -289,7 +317,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         orderId: newOrder._id,
         userId,
         trackingNumber: shipmentResult.trackingNumber,
-        status: "PENDING", // Matching your Shipment model's enum
+        status: "PENDING",
         courier: "Delivery One",
         shippingAddress: newOrder.shippingAddress,
       });
