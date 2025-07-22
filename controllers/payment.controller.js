@@ -1,5 +1,3 @@
-// your-project/backend/src/controllers/order.controller.js
-
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import axios from "axios";
@@ -17,27 +15,65 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-const GST_RATE = 0;
+const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
+  const originPin = process.env.PICKUP_LOCATION_PINCODE;
+  if (!originPin) {
+    throw new ApiError(
+      500,
+      "Pickup location pincode is not configured in .env"
+    );
+  }
 
-/**
- * Shipping charge calculate karne ke liye function.
- * Yeh aapki requirement ko poora karta hai.
- * 1 item = 99
- * 2 items = 99 + (1 * 70) = 169
- * 3 items = 99 + (2 * 70) = 239
- * @param {number} totalQuantity - Cart mein sabhi products ki total quantity.
- * @returns {number} The calculated shipping charge.
- */
-const calculateShippingCharge = (totalQuantity) => {
-  if (totalQuantity <= 0) {
-    return 0;
+  const params = {
+    md: "E",
+    ss: "Delivered",
+    pt: "Pre-paid",
+    cgm: weightInGrams,
+    o_pin: originPin,
+    d_pin: destinationPin,
+  };
+  console.log("weight", weightInGrams);
+
+  try {
+    const response = await axios.get(
+      "https://track.delhivery.com/api/kinko/v1/invoice/charges/.json?md=E&ss=Delivered&d_pin=destinationPin&o_pin=originPin&cgm=10&pt=Pre-paid",
+      {
+        params,
+        headers: {
+          Authorization: `Token ${process.env.DELIVERY_ONE_API_KEY}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const chargeData = response.data;
+    if (chargeData && chargeData.length > 0 && chargeData[0].total_amount) {
+      return parseFloat(chargeData[0].total_amount);
+    } else {
+      console.error(
+        "Delhivery API did not return a valid shipping charge:",
+        chargeData
+      );
+      throw new ApiError(
+        500,
+        "Could not fetch shipping charges from courier partner."
+      );
+    }
+  } catch (error) {
+    const errorMessage =
+      error.response?.data?.error ||
+      error.response?.data?.message ||
+      error.message;
+    console.error(
+      "Error fetching shipping charge from Delhivery:",
+      errorMessage
+    );
+    throw new ApiError(
+      500,
+      "Failed to calculate shipping cost. Please try again later."
+    );
   }
-  if (totalQuantity === 1) {
-    return 0;
-  }
-  const baseCharge = 0;
-  const additionalItemCharge = 0;
-  return baseCharge + (totalQuantity - 1) * additionalItemCharge;
 };
 
 const createDelhiveryShipment = async (order, totalWeight) => {
@@ -102,13 +138,13 @@ const createDelhiveryShipment = async (order, totalWeight) => {
 
 const cancelDelhiveryShipment = async (trackingNumber) => {
   if (!process.env.DELIVERY_ONE_API_URL) {
-    console.error(
-      "Delhivery API URL is not defined in .env file for cancellation."
-    );
     return { success: false, message: "Delhivery API URL is not configured." };
   }
   const url = `${process.env.DELIVERY_ONE_API_URL}/api/p/edit/`;
-  const formData = `data=${JSON.stringify({ waybill: trackingNumber, cancellation: "true" })}`;
+  const formData = `data=${JSON.stringify({
+    waybill: trackingNumber,
+    cancellation: "true",
+  })}`;
   try {
     const res = await axios.post(url, formData, {
       headers: {
@@ -145,6 +181,86 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
   }
 };
 
+export const getPriceBreakdown = asyncHandler(async (req, res) => {
+  const { addressId } = req.body;
+  const userId = req.user._id;
+
+  if (!addressId) {
+    throw new ApiError(
+      400,
+      "Shipping address ID is required to calculate charges."
+    );
+  }
+
+  const user = await User.findById(userId)
+    .populate("cart.product", "price stock weight")
+    .populate("addresses");
+
+  if (!user || !user.cart.length) {
+    throw new ApiError(400, "Your cart is empty.");
+  }
+
+  const shippingAddress = user.addresses.id(addressId);
+  if (!shippingAddress) {
+    throw new ApiError(
+      404,
+      "Selected shipping address not found for this user."
+    );
+  }
+  const destinationPin = shippingAddress.postalCode;
+
+  let backendSubtotal = 0;
+  let totalWeightInGrams = 0;
+
+  for (const item of user.cart) {
+    if (!item.product) continue;
+    backendSubtotal += item.product.price * item.quantity;
+    totalWeightInGrams += (item.product.weight || 0.5) * 1000 * item.quantity;
+  }
+
+  if (backendSubtotal === 0) {
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          breakdown: {
+            subtotal: 0,
+            shipping: 0,
+            gst: 0,
+            total: 0,
+          },
+        },
+        "Cart is empty, nothing to calculate."
+      )
+    );
+  }
+
+  const shippingCharge = await getDelhiveryShippingCharge(
+    destinationPin,
+    totalWeightInGrams
+  );
+  const backendGstAmount = (backendSubtotal + shippingCharge) * 0.05;
+  const backendTotalAmount =
+    backendSubtotal + shippingCharge + backendGstAmount;
+
+  const breakdown = {
+    subtotal: backendSubtotal,
+    shipping: shippingCharge,
+    gst: parseFloat(backendGstAmount.toFixed(2)),
+    total: parseFloat(backendTotalAmount.toFixed(2)),
+  };
+
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { breakdown },
+        "Price breakdown fetched successfully."
+      )
+    );
+});
+
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
   const { addressId, amount: frontendTotalAmount } = req.body;
   const userId = req.user._id;
@@ -154,13 +270,25 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid total amount provided.");
   }
 
-  const user = await User.findById(userId).populate("cart.product");
+  const user = await User.findById(userId)
+    .populate("cart.product", "name price stock weight")
+    .populate("addresses");
+
   if (!user || !user.cart.length) {
     throw new ApiError(400, "Your cart is empty.");
   }
 
+  const shippingAddress = user.addresses.id(addressId);
+  if (!shippingAddress) {
+    throw new ApiError(
+      404,
+      "Selected shipping address not found for this user."
+    );
+  }
+  const destinationPin = shippingAddress.postalCode;
+
   let backendSubtotal = 0;
-  let totalQuantity = 0;
+  let totalWeightInGrams = 0;
 
   for (const item of user.cart) {
     if (!item.product) {
@@ -173,11 +301,14 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
       throw new ApiError(400, `Not enough stock for ${item.product.name}.`);
     }
     backendSubtotal += item.product.price * item.quantity;
-    totalQuantity += item.quantity;
+    totalWeightInGrams += (item.product.weight || 0.5) * 1000 * item.quantity;
   }
 
-  const shippingCharge = calculateShippingCharge(totalQuantity);
-  const backendGstAmount = (backendSubtotal + shippingCharge) * GST_RATE;
+  const shippingCharge = await getDelhiveryShippingCharge(
+    destinationPin,
+    totalWeightInGrams
+  );
+  const backendGstAmount = (backendSubtotal + shippingCharge) * 0.05;
   const backendTotalAmount =
     backendSubtotal + shippingCharge + backendGstAmount;
 
@@ -211,6 +342,12 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
       amount: razorpayOrder.amount,
       key: process.env.RAZORPAY_KEY_ID,
       addressId,
+      breakdown: {
+        subtotal: backendSubtotal,
+        shipping: shippingCharge,
+        gst: backendGstAmount,
+        total: backendTotalAmount,
+      },
     })
   );
 });
@@ -264,7 +401,6 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   let subtotal = 0;
   let totalWeight = 0;
-  let totalQuantity = 0;
   const items = [];
   const stockOps = [];
 
@@ -277,7 +413,6 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     }
     subtotal += item.product.price * item.quantity;
     totalWeight += (item.product.weight || 0.5) * item.quantity;
-    totalQuantity += item.quantity;
 
     items.push({
       product: item.product._id,
@@ -295,8 +430,12 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
   if (!items.length) throw new ApiError(400, "Cart is empty.");
 
-  const shippingCharge = calculateShippingCharge(totalQuantity);
-  const gstAmount = (subtotal + shippingCharge) * GST_RATE;
+  const totalWeightInGrams = totalWeight * 1000;
+  const shippingCharge = await getDelhiveryShippingCharge(
+    shippingAddress.postalCode,
+    totalWeightInGrams
+  );
+  const gstAmount = (subtotal + shippingCharge) * 0.05;
   const finalTotalPrice = subtotal + shippingCharge + gstAmount;
 
   const newOrder = await Order.create({
