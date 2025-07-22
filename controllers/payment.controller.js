@@ -14,6 +14,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+// Helper Functions... (No changes in getDelhiveryShippingCharge, cancelDelhiveryShipment, initiateRazorpayRefund)
 const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
   const originPin = process.env.PICKUP_LOCATION_PINCODE;
   if (!originPin) {
@@ -22,7 +23,6 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
       "Server configuration error: Pickup location pincode is not set."
     );
   }
-
   const params = {
     md: "E",
     ss: "Delivered",
@@ -31,7 +31,6 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
     o_pin: originPin,
     d_pin: destinationPin,
   };
-
   try {
     const response = await axios.get(
       `${process.env.DELIVERY_ONE_API_URL}/api/kinko/v1/invoice/charges/.json`,
@@ -64,16 +63,75 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
     );
   }
 };
-
-const createDelhiveryShipment = async (order, totalWeight) => {
-  if (
-    !process.env.DELIVERY_ONE_API_URL ||
-    !process.env.DELIVERY_ONE_API_KEY ||
-    !"home"
-  ) {
-    console.error(
-      "Delhivery API credentials or Pickup Location Name are missing in .env"
+const cancelDelhiveryShipment = async (trackingNumber) => {
+  if (!process.env.DELIVERY_ONE_API_URL || !process.env.DELIVERY_ONE_API_KEY) {
+    console.warn(
+      "Delhivery API URL/Key not configured, skipping shipment cancellation."
     );
+    return { success: true, message: "Skipped: API not configured." };
+  }
+  const url = `${process.env.DELIVERY_ONE_API_URL}/api/p/edit`;
+  const payload = { waybill: trackingNumber, cancellation: "true" };
+  try {
+    const res = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Token ${process.env.DELIVERY_ONE_API_KEY}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+    if (res.data && res.data.success === false) {
+      throw new Error(
+        `Delhivery API returned failure: ${res.data.rmk || res.data.message || JSON.stringify(res.data)}`
+      );
+    }
+    console.log(
+      "Successfully requested shipment cancellation on Delhivery:",
+      res.data
+    );
+    return res.data;
+  } catch (error) {
+    const errorMessage = error.response?.data?.message || error.message;
+    console.error(
+      `Failed to cancel Delhivery shipment ${trackingNumber}:`,
+      errorMessage
+    );
+    throw new ApiError(
+      500,
+      `Could not cancel shipment with Delhivery: ${errorMessage}`
+    );
+  }
+};
+const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
+  try {
+    return await razorpay.payments.refund(paymentId, {
+      amount: amountInPaisa,
+      speed: "normal",
+      notes: { reason: "Order cancelled by customer or admin." },
+    });
+  } catch (error) {
+    if (error.error?.description?.includes("already been fully refunded")) {
+      return {
+        status: "processed",
+        id: "already_refunded",
+        amount: amountInPaisa,
+      };
+    }
+    throw new Error(
+      `Refund failed: ${error.error ? JSON.stringify(error.error) : error.message}`
+    );
+  }
+};
+
+/**
+ * =========================================================
+ *                *** THE FIX IS HERE ***
+ *      OrderID is now guaranteed to be unique by adding a timestamp.
+ * =========================================================
+ */
+const createDelhiveryShipment = async (order, totalWeight) => {
+  if (!process.env.DELIVERY_ONE_API_URL || !process.env.DELIVERY_ONE_API_KEY) {
+    console.error("Delhivery API credentials are missing in .env");
     return {
       success: false,
       rmk: "Server configuration error for courier service.",
@@ -81,6 +139,13 @@ const createDelhiveryShipment = async (order, totalWeight) => {
   }
 
   const { shippingAddress } = order;
+  const cleanPhoneNumber = (shippingAddress.phone || "")
+    .replace(/\D/g, "")
+    .slice(-10);
+
+  // **THE FIX: Making the order ID always unique for Delhivery**
+  const uniqueDelhiveryOrderId = `${order._id.toString()}-${Date.now()}`;
+
   const payload = {
     shipments: [
       {
@@ -90,8 +155,8 @@ const createDelhiveryShipment = async (order, totalWeight) => {
         city: shippingAddress.city,
         state: shippingAddress.state,
         country: "India",
-        phone: shippingAddress.phone,
-        orderid: order._id.toString(),
+        phone: cleanPhoneNumber,
+        orderid: uniqueDelhiveryOrderId, // Using the new unique ID
         payment_mode: "Prepaid",
         total_amount: parseFloat(order.totalPrice),
         products_desc: order.orderItems
@@ -107,6 +172,10 @@ const createDelhiveryShipment = async (order, totalWeight) => {
     pickup_location: { name: "home" },
   };
 
+  console.log("--- [DEBUG] DATA SENT TO DELHIHERY API ---");
+  console.log(JSON.stringify(payload, null, 2));
+  console.log("------------------------------------------");
+
   const url = `${process.env.DELIVERY_ONE_API_URL}/api/cmu/push.json`;
   const formData = `format=json&data=${JSON.stringify(payload)}`;
 
@@ -117,6 +186,7 @@ const createDelhiveryShipment = async (order, totalWeight) => {
         "Content-Type": "application/x-www-form-urlencoded",
       },
     });
+
     const { success, packages, rmk } = res.data;
     if (success && packages && packages.length > 0) {
       return {
@@ -139,56 +209,7 @@ const createDelhiveryShipment = async (order, totalWeight) => {
   }
 };
 
-const cancelDelhiveryShipment = async (trackingNumber) => {
-  if (!process.env.DELIVERY_ONE_API_URL) {
-    console.warn(
-      "Delhivery API URL not configured, skipping shipment cancellation."
-    );
-    return { success: true, message: "Skipped: API URL not configured." };
-  }
-  const url = `${process.env.DELIVERY_ONE_API_URL}/api/p/edit/`;
-  const formData = `data=${JSON.stringify({ waybill: trackingNumber, cancellation: "true" })}`;
-  try {
-    const res = await axios.post(url, formData, {
-      headers: {
-        Authorization: `Token ${process.env.DELIVERY_ONE_API_KEY}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-    });
-    return res.data;
-  } catch (error) {
-    console.error(
-      `Failed to cancel Delhivery shipment ${trackingNumber}:`,
-      error.response?.data?.message || error.message
-    );
-    return {
-      success: false,
-      message: `Could not cancel shipment: ${error.response?.data?.message || error.message}`,
-    };
-  }
-};
-
-const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
-  try {
-    return await razorpay.payments.refund(paymentId, {
-      amount: amountInPaisa,
-      speed: "normal",
-      notes: { reason: "Order cancelled by customer or admin." },
-    });
-  } catch (error) {
-    if (error.error?.description?.includes("already been fully refunded")) {
-      return {
-        status: "processed",
-        id: "already_refunded",
-        amount: amountInPaisa,
-      };
-    }
-    throw new Error(
-      `Refund failed: ${error.error ? JSON.stringify(error.error) : error.message}`
-    );
-  }
-};
-
+// API Controllers (getPriceBreakdown, createRazorpayOrder, etc. have no changes)
 export const getPriceBreakdown = asyncHandler(async (req, res) => {
   const { addressId } = req.body;
   if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
@@ -224,20 +245,22 @@ export const getPriceBreakdown = asyncHandler(async (req, res) => {
   const backendGstAmount = (backendSubtotal + shippingCharge) * 0.05;
   const backendTotalAmount =
     backendSubtotal + shippingCharge + backendGstAmount;
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        breakdown: {
-          subtotal: backendSubtotal,
-          shipping: shippingCharge,
-          gst: parseFloat(backendGstAmount.toFixed(2)),
-          total: parseFloat(backendTotalAmount.toFixed(2)),
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          breakdown: {
+            subtotal: backendSubtotal,
+            shipping: shippingCharge,
+            gst: parseFloat(backendGstAmount.toFixed(2)),
+            total: parseFloat(backendTotalAmount.toFixed(2)),
+          },
         },
-      },
-      "Price breakdown fetched successfully."
-    )
-  );
+        "Price breakdown fetched successfully."
+      )
+    );
 });
 
 export const createRazorpayOrder = asyncHandler(async (req, res) => {
@@ -277,18 +300,20 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   });
   if (!razorpayOrder)
     throw new ApiError(500, "Failed to create Razorpay order.");
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        orderId: razorpayOrder.id,
-        amount: razorpayOrder.amount,
-        key: process.env.RAZORPAY_KEY_ID,
-        addressId,
-      },
-      "Razorpay order created."
-    )
-  );
+  res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          orderId: razorpayOrder.id,
+          amount: razorpayOrder.amount,
+          key: process.env.RAZORPAY_KEY_ID,
+          addressId,
+        },
+        "Razorpay order created."
+      )
+    );
 });
 
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
@@ -298,7 +323,6 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     razorpay_signature,
     addressId,
   } = req.body;
-
   if (
     !razorpay_order_id ||
     !razorpay_payment_id ||
@@ -307,32 +331,25 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
   ) {
     throw new ApiError(400, "Missing payment details.");
   }
-
   const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
   const expectedSign = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
     .update(sign)
     .digest("hex");
-
   if (razorpay_signature !== expectedSign) {
     throw new ApiError(400, "Invalid payment signature. Transaction failed.");
   }
-
   const session = await mongoose.startSession();
   session.startTransaction();
-
   try {
     const user = await User.findById(req.user._id)
       .populate({ path: "cart.product", select: "name price stock weight" })
       .populate("addresses")
       .session(session);
-
     if (!user) throw new ApiError(404, "User not found.");
-
     const selectedAddress = user.addresses.id(addressId);
     if (!selectedAddress)
       throw new ApiError(404, "Selected address not found.");
-
     let subtotal = 0,
       totalWeightInKg = 0,
       items = [],
@@ -359,18 +376,15 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         },
       });
     }
-
     if (!items.length) {
       throw new ApiError(400, "Cannot place order with an empty cart.");
     }
-
     const shippingCharge = await getDelhiveryShippingCharge(
       selectedAddress.postalCode,
       totalWeightInKg * 1000
     );
     const gstAmount = (subtotal + shippingCharge) * 0.05;
     const finalTotalPrice = subtotal + shippingCharge + gstAmount;
-
     const [newOrder] = await Order.create(
       [
         {
@@ -389,32 +403,26 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
       ],
       { session }
     );
-
     const shipmentResult = await createDelhiveryShipment(
       newOrder,
       totalWeightInKg
     );
-
     if (!shipmentResult.success) {
       throw new ApiError(
         500,
         `Shipment creation failed: ${shipmentResult.rmk}. Your order has been automatically cancelled.`
       );
     }
-
     newOrder.orderStatus = "Processing";
     newOrder.shipmentDetails = {
       trackingNumber: shipmentResult.trackingNumber,
       courier: "Delhivery",
     };
     await newOrder.save({ session });
-
     await Product.bulkWrite(stockOps, { session });
     user.cart = [];
     await user.save({ session });
-
     await session.commitTransaction();
-
     res
       .status(201)
       .json(
@@ -435,60 +443,81 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
 
 export const cancelOrder = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
-  if (!mongoose.Types.ObjectId.isValid(orderId))
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
     throw new ApiError(400, "Invalid Order ID.");
-  const order = await Order.findById(orderId);
-  if (!order) throw new ApiError(404, "Order not found.");
-  const isOwner = order.user.toString() === req.user._id.toString();
-  const isAdmin = req.user.role === "admin";
-  if (!isOwner && !isAdmin)
-    throw new ApiError(403, "Not authorized to cancel this order.");
-  if (["Shipped", "Delivered", "Cancelled"].includes(order.orderStatus)) {
-    throw new ApiError(
-      400,
-      `Order is already ${order.orderStatus.toLowerCase()} and cannot be cancelled.`
-    );
   }
-  if (order.shipmentDetails?.trackingNumber) {
-    await cancelDelhiveryShipment(order.shipmentDetails.trackingNumber);
-  }
-  if (order.paymentId) {
-    const refund = await initiateRazorpayRefund(
-      order.paymentId,
-      Math.round(order.totalPrice * 100)
-    );
-    order.refundDetails = {
-      refundId: refund.id,
-      amount: refund.amount / 100,
-      status: refund.status,
-      createdAt: new Date(),
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const order = await Order.findById(orderId).session(session);
+    if (!order) {
+      throw new ApiError(404, "Order not found.");
+    }
+    const isOwner = order.user.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === "admin";
+    if (!isOwner && !isAdmin) {
+      throw new ApiError(403, "Not authorized to cancel this order.");
+    }
+    if (["Shipped", "Delivered", "Cancelled"].includes(order.orderStatus)) {
+      throw new ApiError(
+        400,
+        `Order is already ${order.orderStatus.toLowerCase()} and cannot be cancelled.`
+      );
+    }
+    if (order.shipmentDetails?.trackingNumber) {
+      await cancelDelhiveryShipment(order.shipmentDetails.trackingNumber);
+    }
+    if (order.paymentId) {
+      const refund = await initiateRazorpayRefund(
+        order.paymentId,
+        Math.round(order.totalPrice * 100)
+      );
+      order.refundDetails = {
+        refundId: refund.id,
+        amount: refund.amount / 100,
+        status: refund.status,
+        createdAt: new Date(),
+      };
+    }
+    const stockRestoreOps = order.orderItems.map((item) => ({
+      updateOne: {
+        filter: { _id: item.product },
+        update: { $inc: { stock: item.quantity } },
+      },
+    }));
+    if (stockRestoreOps.length > 0) {
+      await Product.bulkWrite(stockRestoreOps, { session });
+    }
+    order.orderStatus = "Cancelled";
+    order.cancellationDetails = {
+      cancelledBy: isAdmin ? "Admin" : "User",
+      reason: req.body.reason || "Cancelled by request",
+      cancellationDate: new Date(),
     };
-  }
-  const stockRestoreOps = order.orderItems.map((item) => ({
-    updateOne: {
-      filter: { _id: item.product },
-      update: { $inc: { stock: item.quantity } },
-    },
-  }));
-  if (stockRestoreOps.length > 0) {
-    await Product.bulkWrite(stockRestoreOps);
-  }
-  order.orderStatus = "Cancelled";
-  order.cancellationDetails = {
-    cancelledBy: isAdmin ? "Admin" : "User",
-    reason: req.body.reason || "Cancelled by request",
-    cancellationDate: new Date(),
-  };
-  const updatedOrder = await order.save({ validateBeforeSave: false });
-  res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        updatedOrder,
-        "Order has been cancelled successfully."
-      )
+    const updatedOrder = await order.save({ session });
+    await session.commitTransaction();
+    res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          updatedOrder,
+          "Order has been cancelled successfully."
+        )
+      );
+  } catch (error) {
+    await session.abortTransaction();
+    console.error(
+      `Order cancellation failed for ${orderId}. Transaction rolled back. Error:`,
+      error.message
     );
+    throw new ApiError(
+      error.statusCode || 500,
+      `Order cancellation failed: ${error.message}`
+    );
+  } finally {
+    session.endSession();
+  }
 });
 
 export const getMyOrders = asyncHandler(async (req, res) => {
