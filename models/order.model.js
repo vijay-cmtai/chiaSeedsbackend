@@ -30,6 +30,9 @@ const orderSchema = new mongoose.Schema(
       type: shippingAddressSchema,
       required: true,
     },
+    itemsPrice: { type: Number, required: true },
+    shippingPrice: { type: Number, required: true },
+    taxPrice: { type: Number, required: true },
     totalPrice: { type: Number, required: true },
     orderStatus: {
       type: String,
@@ -57,7 +60,6 @@ const orderSchema = new mongoose.Schema(
       trackingNumber: { type: String },
       courier: { type: String },
     },
-    // --- YEH DO FIELDS ADD KAREIN ---
     refundDetails: {
       refundId: String,
       amount: Number,
@@ -69,7 +71,7 @@ const orderSchema = new mongoose.Schema(
         type: String,
         enum: ["User", "Admin"],
       },
-      reason: { type: String }, // Admin koi reason de sakta hai
+      reason: { type: String },
       cancellationDate: { type: Date },
     },
   },
