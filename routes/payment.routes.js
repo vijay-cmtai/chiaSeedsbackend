@@ -8,7 +8,6 @@ import {
   cancelOrder,
   getMyOrders,
   getSingleOrderDetails,
-  retryShipment,
   getPriceBreakdown, // Naye function ko import karein
 } from "../controllers/payment.controller.js";
 
@@ -25,10 +24,6 @@ router.route("/verify").post(verifyPaymentAndPlaceOrder);
 
 router.route("/my-orders").get(getMyOrders);
 
-router.route("/retry-shipment").post(retryShipment);
-
 router.route("/:orderId").get(getSingleOrderDetails);
-
-router.route("/:orderId/cancel").patch(cancelOrder);
-
+router.route("/:orderId/cancel").post(cancelOrder); // patch ko post se badal diya gaya hai
 export default router;
