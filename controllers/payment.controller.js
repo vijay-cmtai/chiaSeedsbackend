@@ -1,3 +1,5 @@
+// payment.controller.js
+
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import axios from "axios";
@@ -32,11 +34,10 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
     o_pin: originPin,
     d_pin: destinationPin,
   };
-  console.log("weight", weightInGrams);
 
   try {
     const response = await axios.get(
-      "https://track.delhivery.com/api/kinko/v1/invoice/charges/.json?md=E&ss=Delivered&d_pin=destinationPin&o_pin=originPin&cgm=10&pt=Pre-paid",
+      "https://track.delhivery.com/api/kinko/v1/invoice/charges/.json", // URL ko saaf kiya gaya
       {
         params,
         headers: {
@@ -104,7 +105,7 @@ const createDelhiveryShipment = async (order, totalWeight) => {
         weight: totalWeight || 0.5,
       },
     ],
-    pickup_location: { name: "home" },
+    pickup_location: { name: "home" }, // Ensure 'home' is a valid pickup location name in your Delhivery account
   };
   const url = `${process.env.DELIVERY_ONE_API_URL}/api/cmu/push.json`;
   const formData = `format=json&data=${JSON.stringify(payload)}`;
@@ -352,6 +353,9 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   );
 });
 
+// =================================================================
+// ===== THE MAIN FIX IS IN THE FUNCTION BELOW =====================
+// =================================================================
 export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
   const {
     razorpay_order_id,
@@ -438,17 +442,22 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
   const gstAmount = (subtotal + shippingCharge) * 0.05;
   const finalTotalPrice = subtotal + shippingCharge + gstAmount;
 
+  // ===== FIX: Add the missing fields required by the Order model =====
   const newOrder = await Order.create({
     user: userId,
     orderItems: items,
     shippingAddress,
-    totalPrice: finalTotalPrice,
+    itemsPrice: subtotal, // YEH FIELD ADD KIYA GAYA
+    shippingPrice: shippingCharge, // YEH FIELD ADD KIYA GAYA
+    taxPrice: parseFloat(gstAmount.toFixed(2)), // YEH FIELD ADD KIYA GAYA
+    totalPrice: parseFloat(finalTotalPrice.toFixed(2)),
     paymentId: razorpay_payment_id,
     razorpayOrderId: razorpay_order_id,
     paymentMethod: "Razorpay",
-    orderStatus: "Paid",
+    orderStatus: "Paid", // Default status on successful payment
   });
 
+  // Automatic shipment creation logic (this part remains the same)
   try {
     const shipmentResult = await createDelhiveryShipment(newOrder, totalWeight);
     if (shipmentResult.success) {
@@ -456,19 +465,21 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
         orderId: newOrder._id,
         userId,
         trackingNumber: shipmentResult.trackingNumber,
-        status: "PENDING",
-        courier: "Delivery One",
+        status: "PENDING", // Initial status from courier
+        courier: "Delhivery", // Courier name
         shippingAddress: newOrder.shippingAddress,
       });
-      newOrder.orderStatus = "Processing";
+      newOrder.orderStatus = "Processing"; // Update order status
       newOrder.shipmentDetails = {
         shipmentId: shipment._id,
         trackingNumber: shipmentResult.trackingNumber,
-        courier: "Delivery One",
+        courier: "Delhivery",
       };
       await newOrder.save({ validateBeforeSave: false });
     }
   } catch (err) {
+    // Agar shipment creation fail hota hai, toh order cancel nahi hoga.
+    // Admin isko baad mein retry kar sakta hai.
     console.error(
       `Automatic shipment creation failed for Order ID: ${newOrder._id}. Error: ${err.message}`
     );
@@ -484,7 +495,7 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
       new ApiResponse(
         201,
         { order: newOrder },
-        "Payment verified & order placed."
+        "Payment verified & order placed successfully."
       )
     );
 });
@@ -523,6 +534,14 @@ export const cancelOrder = asyncHandler(async (req, res) => {
       cancellationDate: new Date(),
     };
     await order.save({ validateBeforeSave: false });
+    // Restore stock even if refund fails
+    const stockUpdateOperations = order.orderItems.map((item) => ({
+      updateOne: {
+        filter: { _id: item.product },
+        update: { $inc: { stock: item.quantity } },
+      },
+    }));
+    await Product.bulkWrite(stockUpdateOperations);
     throw new ApiError(
       500,
       "Order cancelled, but refund failed. Please contact support."
@@ -592,8 +611,12 @@ export const retryShipment = asyncHandler(async (req, res) => {
   );
   if (!order) throw new ApiError(404, "Order not found.");
 
+  if (order.shipmentDetails?.trackingNumber) {
+    throw new ApiError(400, "A shipment for this order already exists.");
+  }
+
   if (order.orderStatus === "Shipped") {
-    throw new ApiError(400, "This order is already shipped.");
+    throw new ApiError(400, "This order is already marked as shipped.");
   }
 
   const totalWeight = order.orderItems.reduce((acc, item) => {
@@ -609,13 +632,13 @@ export const retryShipment = asyncHandler(async (req, res) => {
         trackingNumber: result.trackingNumber,
         status: "PENDING",
         shippingAddress: order.shippingAddress,
-        courier: "Delivery One",
+        courier: "Delhivery",
       });
       order.orderStatus = "Processing";
       order.shipmentDetails = {
         shipmentId: newShipment._id,
         trackingNumber: result.trackingNumber,
-        courier: "Delivery One",
+        courier: "Delhivery",
       };
       await order.save({ validateBeforeSave: false });
       res
