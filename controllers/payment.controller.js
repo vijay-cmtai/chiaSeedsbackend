@@ -17,7 +17,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-const GST_RATE = 0.05;
+const GST_RATE = 0;
 
 /**
  * Shipping charge calculate karne ke liye function.
@@ -33,10 +33,10 @@ const calculateShippingCharge = (totalQuantity) => {
     return 0;
   }
   if (totalQuantity === 1) {
-    return 99;
+    return 0;
   }
-  const baseCharge = 99;
-  const additionalItemCharge = 70;
+  const baseCharge = 0;
+  const additionalItemCharge = 0;
   return baseCharge + (totalQuantity - 1) * additionalItemCharge;
 };
 
