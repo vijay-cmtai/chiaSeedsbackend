@@ -1,5 +1,3 @@
-// /controllers/payment.controller.js
-
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import axios from "axios";
@@ -16,16 +14,15 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// --- HELPER FUNCTIONS (COMPLETE) ---
-
 const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
   const originPin = process.env.PICKUP_LOCATION_PINCODE;
   if (!originPin) {
     throw new ApiError(
       500,
-      "Pickup location pincode is not configured in .env"
+      "Server configuration error: Pickup location pincode is not set."
     );
   }
+
   const params = {
     md: "E",
     ss: "Delivered",
@@ -34,9 +31,10 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
     o_pin: originPin,
     d_pin: destinationPin,
   };
+
   try {
     const response = await axios.get(
-      "https://track.delhivery.com/api/kinko/v1/invoice/charges/.json",
+      `${process.env.DELIVERY_ONE_API_URL}/api/kinko/v1/invoice/charges/.json`,
       {
         params,
         headers: {
@@ -51,7 +49,7 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
       return parseFloat(chargeData[0].total_amount);
     }
     throw new ApiError(
-      500,
+      400,
       "Could not fetch shipping charges. The destination may be unserviceable."
     );
   } catch (error) {
@@ -61,16 +59,27 @@ const getDelhiveryShippingCharge = async (destinationPin, weightInGrams) => {
       errorMessage
     );
     throw new ApiError(
-      500,
+      400,
       "Failed to calculate shipping cost. The destination may be unserviceable."
     );
   }
 };
 
 const createDelhiveryShipment = async (order, totalWeight) => {
-  if (!process.env.DELIVERY_ONE_API_URL || !process.env.DELIVERY_ONE_API_KEY) {
-    throw new Error("Delhivery API URL or Key is not defined in .env file.");
+  if (
+    !process.env.DELIVERY_ONE_API_URL ||
+    !process.env.DELIVERY_ONE_API_KEY ||
+    !"home"
+  ) {
+    console.error(
+      "Delhivery API credentials or Pickup Location Name are missing in .env"
+    );
+    return {
+      success: false,
+      rmk: "Server configuration error for courier service.",
+    };
   }
+
   const { shippingAddress } = order;
   const payload = {
     shipments: [
@@ -92,13 +101,15 @@ const createDelhiveryShipment = async (order, totalWeight) => {
         quantity: order.orderItems
           .reduce((sum, item) => sum + item.quantity, 0)
           .toString(),
-        weight: totalWeight || 0.5,
+        weight: totalWeight,
       },
     ],
-    pickup_location: { name: "home" }, // Ensure 'home' is a valid pickup location in your Delhivery account
+    pickup_location: { name: "home" },
   };
+
   const url = `${process.env.DELIVERY_ONE_API_URL}/api/cmu/push.json`;
   const formData = `format=json&data=${JSON.stringify(payload)}`;
+
   try {
     const res = await axios.post(url, formData, {
       headers: {
@@ -108,14 +119,23 @@ const createDelhiveryShipment = async (order, totalWeight) => {
     });
     const { success, packages, rmk } = res.data;
     if (success && packages && packages.length > 0) {
-      return { success: true, trackingNumber: packages[0].waybill };
+      return {
+        success: true,
+        trackingNumber: packages[0].waybill,
+        rmk: "Shipment created successfully",
+      };
     }
-    throw new Error(
-      `Delhivery API returned failure: ${rmk || JSON.stringify(res.data)}`
-    );
+    return { success: false, rmk: rmk || JSON.stringify(res.data) };
   } catch (error) {
     const errorMessage = error.response?.data?.message || error.message;
-    throw new Error(`Courier API request failed: ${errorMessage}`);
+    console.error(
+      `Delhivery shipment creation failed for Order ${order._id}:`,
+      errorMessage
+    );
+    return {
+      success: false,
+      rmk: `Courier API request failed: ${errorMessage}`,
+    };
   }
 };
 
@@ -141,7 +161,6 @@ const cancelDelhiveryShipment = async (trackingNumber) => {
       `Failed to cancel Delhivery shipment ${trackingNumber}:`,
       error.response?.data?.message || error.message
     );
-    // Don't throw error, just report failure
     return {
       success: false,
       message: `Could not cancel shipment: ${error.response?.data?.message || error.message}`,
@@ -170,8 +189,6 @@ const initiateRazorpayRefund = async (paymentId, amountInPaisa) => {
   }
 };
 
-// --- API ENDPOINT CONTROLLERS (COMPLETE) ---
-
 export const getPriceBreakdown = asyncHandler(async (req, res) => {
   const { addressId } = req.body;
   if (!addressId) throw new ApiError(400, "Shipping address ID is required.");
@@ -189,11 +206,9 @@ export const getPriceBreakdown = asyncHandler(async (req, res) => {
           "Cart is empty."
         )
       );
-
   const shippingAddress = user.addresses.id(addressId);
   if (!shippingAddress)
     throw new ApiError(404, "Selected shipping address not found.");
-
   let backendSubtotal = 0,
     totalWeightInGrams = 0;
   user.cart.forEach((item) => {
@@ -202,7 +217,6 @@ export const getPriceBreakdown = asyncHandler(async (req, res) => {
       totalWeightInGrams += (item.product.weight || 0.5) * 1000 * item.quantity;
     }
   });
-
   const shippingCharge = await getDelhiveryShippingCharge(
     shippingAddress.postalCode,
     totalWeightInGrams
@@ -210,7 +224,6 @@ export const getPriceBreakdown = asyncHandler(async (req, res) => {
   const backendGstAmount = (backendSubtotal + shippingCharge) * 0.05;
   const backendTotalAmount =
     backendSubtotal + shippingCharge + backendGstAmount;
-
   res.status(200).json(
     new ApiResponse(
       200,
@@ -231,17 +244,14 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
   const { addressId, amount: frontendTotalAmount } = req.body;
   if (!addressId || !frontendTotalAmount)
     throw new ApiError(400, "Address ID and amount are required.");
-
   const user = await User.findById(req.user._id)
     .populate("cart.product", "name price stock weight")
     .populate("addresses");
   if (!user || !user.cart.length)
     throw new ApiError(400, "Your cart is empty.");
-
   const shippingAddress = user.addresses.id(addressId);
   if (!shippingAddress)
     throw new ApiError(404, "Selected shipping address not found.");
-
   let backendSubtotal = 0,
     totalWeightInGrams = 0;
   for (const item of user.cart) {
@@ -250,7 +260,6 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     backendSubtotal += item.product.price * item.quantity;
     totalWeightInGrams += (item.product.weight || 0.5) * 1000 * item.quantity;
   }
-
   const shippingCharge = await getDelhiveryShippingCharge(
     shippingAddress.postalCode,
     totalWeightInGrams
@@ -259,19 +268,15 @@ export const createRazorpayOrder = asyncHandler(async (req, res) => {
     backendSubtotal +
     shippingCharge +
     (backendSubtotal + shippingCharge) * 0.05;
-
   if (Math.abs(frontendTotalAmount - backendTotalAmount) > 1)
     throw new ApiError(400, "Price mismatch. Please refresh and try again.");
-
   const razorpayOrder = await razorpay.orders.create({
     amount: Math.round(backendTotalAmount * 100),
     currency: "INR",
     receipt: crypto.randomBytes(10).toString("hex"),
   });
-
   if (!razorpayOrder)
     throw new ApiError(500, "Failed to create Razorpay order.");
-
   res.status(200).json(
     new ApiResponse(
       200,
@@ -293,132 +298,160 @@ export const verifyPaymentAndPlaceOrder = asyncHandler(async (req, res) => {
     razorpay_signature,
     addressId,
   } = req.body;
+
   if (
     !razorpay_order_id ||
     !razorpay_payment_id ||
     !razorpay_signature ||
     !addressId
-  )
+  ) {
     throw new ApiError(400, "Missing payment details.");
+  }
 
   const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
   const expectedSign = crypto
     .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
     .update(sign)
     .digest("hex");
-  if (razorpay_signature !== expectedSign)
-    throw new ApiError(400, "Invalid payment signature.");
 
-  const user = await User.findById(req.user._id)
-    .populate({ path: "cart.product", select: "name price stock weight" })
-    .populate("addresses");
-  if (!user) throw new ApiError(404, "User not found.");
-
-  const selectedAddress = user.addresses.id(addressId);
-  if (!selectedAddress) throw new ApiError(404, "Selected address not found.");
-
-  let subtotal = 0,
-    totalWeight = 0,
-    items = [],
-    stockOps = [];
-  for (const item of user.cart) {
-    if (!item.product || item.product.stock < item.quantity)
-      throw new ApiError(400, `Item "${item.product?.name}" is out of stock.`);
-    subtotal += item.product.price * item.quantity;
-    totalWeight += (item.product.weight || 0.5) * item.quantity;
-    items.push({
-      product: item.product._id,
-      name: item.product.name,
-      quantity: item.quantity,
-      price: item.product.price,
-    });
-    stockOps.push({
-      updateOne: {
-        filter: { _id: item.product._id },
-        update: { $inc: { stock: -item.quantity } },
-      },
-    });
+  if (razorpay_signature !== expectedSign) {
+    throw new ApiError(400, "Invalid payment signature. Transaction failed.");
   }
 
-  if (!items.length)
-    throw new ApiError(400, "Cannot place order with an empty cart.");
-
-  const shippingCharge = await getDelhiveryShippingCharge(
-    selectedAddress.postalCode,
-    totalWeight * 1000
-  );
-  const gstAmount = (subtotal + shippingCharge) * 0.05;
-  const finalTotalPrice = subtotal + shippingCharge + gstAmount;
-
-  const newOrder = await Order.create({
-    user: req.user._id,
-    orderItems: items,
-    shippingAddress: { ...selectedAddress.toObject(), _id: undefined },
-    itemsPrice: subtotal,
-    shippingPrice: shippingCharge,
-    taxPrice: parseFloat(gstAmount.toFixed(2)),
-    totalPrice: parseFloat(finalTotalPrice.toFixed(2)),
-    paymentId: razorpay_payment_id,
-    razorpayOrderId: razorpay_order_id,
-    paymentMethod: "Razorpay",
-    orderStatus: "Paid",
-  });
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
   try {
-    const shipmentResult = await createDelhiveryShipment(newOrder, totalWeight);
-    if (shipmentResult.success) {
-      newOrder.orderStatus = "Processing";
-      newOrder.shipmentDetails = {
-        trackingNumber: shipmentResult.trackingNumber,
-        courier: "Delhivery",
-      };
-      await newOrder.save({ validateBeforeSave: false });
+    const user = await User.findById(req.user._id)
+      .populate({ path: "cart.product", select: "name price stock weight" })
+      .populate("addresses")
+      .session(session);
+
+    if (!user) throw new ApiError(404, "User not found.");
+
+    const selectedAddress = user.addresses.id(addressId);
+    if (!selectedAddress)
+      throw new ApiError(404, "Selected address not found.");
+
+    let subtotal = 0,
+      totalWeightInKg = 0,
+      items = [],
+      stockOps = [];
+    for (const item of user.cart) {
+      if (!item.product || item.product.stock < item.quantity) {
+        throw new ApiError(
+          400,
+          `Item "${item.product?.name}" is out of stock.`
+        );
+      }
+      subtotal += item.product.price * item.quantity;
+      totalWeightInKg += (item.product.weight || 0.5) * item.quantity;
+      items.push({
+        product: item.product._id,
+        name: item.product.name,
+        quantity: item.quantity,
+        price: item.product.price,
+      });
+      stockOps.push({
+        updateOne: {
+          filter: { _id: item.product._id },
+          update: { $inc: { stock: -item.quantity } },
+        },
+      });
     }
-  } catch (err) {
-    console.error(
-      `Automatic shipment creation failed for Order ID: ${newOrder._id}. Error: ${err.message}`
+
+    if (!items.length) {
+      throw new ApiError(400, "Cannot place order with an empty cart.");
+    }
+
+    const shippingCharge = await getDelhiveryShippingCharge(
+      selectedAddress.postalCode,
+      totalWeightInKg * 1000
     );
+    const gstAmount = (subtotal + shippingCharge) * 0.05;
+    const finalTotalPrice = subtotal + shippingCharge + gstAmount;
+
+    const [newOrder] = await Order.create(
+      [
+        {
+          user: req.user._id,
+          orderItems: items,
+          shippingAddress: { ...selectedAddress.toObject(), _id: undefined },
+          itemsPrice: subtotal,
+          shippingPrice: shippingCharge,
+          taxPrice: parseFloat(gstAmount.toFixed(2)),
+          totalPrice: parseFloat(finalTotalPrice.toFixed(2)),
+          paymentId: razorpay_payment_id,
+          razorpayOrderId: razorpay_order_id,
+          paymentMethod: "Razorpay",
+          orderStatus: "Paid",
+        },
+      ],
+      { session }
+    );
+
+    const shipmentResult = await createDelhiveryShipment(
+      newOrder,
+      totalWeightInKg
+    );
+
+    if (!shipmentResult.success) {
+      throw new ApiError(
+        500,
+        `Shipment creation failed: ${shipmentResult.rmk}. Your order has been automatically cancelled.`
+      );
+    }
+
+    newOrder.orderStatus = "Processing";
+    newOrder.shipmentDetails = {
+      trackingNumber: shipmentResult.trackingNumber,
+      courier: "Delhivery",
+    };
+    await newOrder.save({ session });
+
+    await Product.bulkWrite(stockOps, { session });
+    user.cart = [];
+    await user.save({ session });
+
+    await session.commitTransaction();
+
+    res
+      .status(201)
+      .json(
+        new ApiResponse(
+          201,
+          { order: newOrder },
+          "Payment verified & order placed successfully."
+        )
+      );
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("TRANSACTION FAILED AND ROLLED BACK:", error.message);
+    throw error;
+  } finally {
+    session.endSession();
   }
-
-  await Product.bulkWrite(stockOps);
-  user.cart = [];
-  await user.save({ validateBeforeSave: false });
-
-  res
-    .status(201)
-    .json(
-      new ApiResponse(
-        201,
-        { order: newOrder },
-        "Payment verified & order placed successfully."
-      )
-    );
 });
 
 export const cancelOrder = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   if (!mongoose.Types.ObjectId.isValid(orderId))
     throw new ApiError(400, "Invalid Order ID.");
-
   const order = await Order.findById(orderId);
   if (!order) throw new ApiError(404, "Order not found.");
-
   const isOwner = order.user.toString() === req.user._id.toString();
   const isAdmin = req.user.role === "admin";
   if (!isOwner && !isAdmin)
     throw new ApiError(403, "Not authorized to cancel this order.");
-
   if (["Shipped", "Delivered", "Cancelled"].includes(order.orderStatus)) {
     throw new ApiError(
       400,
       `Order is already ${order.orderStatus.toLowerCase()} and cannot be cancelled.`
     );
   }
-
   if (order.shipmentDetails?.trackingNumber) {
     await cancelDelhiveryShipment(order.shipmentDetails.trackingNumber);
   }
-
   if (order.paymentId) {
     const refund = await initiateRazorpayRefund(
       order.paymentId,
@@ -431,7 +464,6 @@ export const cancelOrder = asyncHandler(async (req, res) => {
       createdAt: new Date(),
     };
   }
-
   const stockRestoreOps = order.orderItems.map((item) => ({
     updateOne: {
       filter: { _id: item.product },
@@ -441,16 +473,13 @@ export const cancelOrder = asyncHandler(async (req, res) => {
   if (stockRestoreOps.length > 0) {
     await Product.bulkWrite(stockRestoreOps);
   }
-
   order.orderStatus = "Cancelled";
   order.cancellationDetails = {
     cancelledBy: isAdmin ? "Admin" : "User",
     reason: req.body.reason || "Cancelled by request",
     cancellationDate: new Date(),
   };
-
   const updatedOrder = await order.save({ validateBeforeSave: false });
-
   res
     .status(200)
     .json(
@@ -481,7 +510,8 @@ export const getSingleOrderDetails = asyncHandler(async (req, res) => {
   if (
     order.user.toString() !== req.user._id.toString() &&
     req.user.role !== "admin"
-  )
-    throw new ApiError(403, "Not authorized.");
+  ) {
+    throw new ApiError(403, "Not authorized to view this order.");
+  }
   res.status(200).json(new ApiResponse(200, order, "Order details fetched."));
 });
