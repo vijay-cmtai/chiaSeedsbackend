@@ -21,7 +21,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
   const emailHtml = `
     <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-      <h2>Welcome to Naraaglobak Enterprises!</h2>
+      <h2>Welcome to Naraaglobal Enterprises!</h2>
       <p>Hi ${name},</p>
       <p>Thank you for registering. Please use the following OTP to verify your email address. This OTP is valid for 10 minutes.</p>
       <p style="font-size: 24px; font-weight: bold; letter-spacing: 2px; background-color: #f0f0f0; padding: 10px 20px; border-radius: 5px; display: inline-block;">
