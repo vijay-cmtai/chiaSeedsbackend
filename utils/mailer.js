@@ -1,31 +1,41 @@
+// utils/email.js (FINAL AND CORRECT VERSION)
+
 import nodemailer from "nodemailer";
 import { ApiError } from "./ApiError.js";
 
-const transporter = nodemailer.createTransport({
-  host: process.env.MAIL_HOST,
-  port: process.env.MAIL_PORT,
-  secure: false,
-  auth: {
-    user: process.env.MAIL_USER,
-    pass: process.env.MAIL_PASS,
-  },
-});
-
-const sendEmail = async (to, subject, html) => {
+export const sendEmail = async (to, subject, html) => {
   try {
-    await transporter.sendMail({
+    // Transporter ko hamesha function ke ANDAR banayein
+    const transporter = nodemailer.createTransport({
+      host: process.env.MAIL_HOST,
+      port: process.env.MAIL_PORT,
+      // ===> YAHI HAI MUKHYA FIX <===
+      // Agar port 465 hai, toh secure: true, warna secure: false.
+      secure: process.env.MAIL_PORT == 465,
+      auth: {
+        user: process.env.MAIL_USER,
+        pass: process.env.MAIL_PASS,
+      },
+    });
+
+    const info = await transporter.sendMail({
       from: `"Naraaglobal Enterprises" <${process.env.MAIL_USER}>`,
       to: to,
       subject: subject,
       html: html,
     });
+
+    console.log(`✅ Email sent successfully to ${to}.`);
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error("❌ Error sending email via Nodemailer:", error);
+    console.error("Nodemailer Configuration Used:", {
+      host: process.env.MAIL_HOST,
+      port: process.env.MAIL_PORT,
+      user: process.env.MAIL_USER,
+    });
     throw new ApiError(
       500,
-      "Failed to send email due to a server issue. Please try again later."
+      "Failed to send email. Please check server logs for details."
     );
   }
 };
-
-export { sendEmail };
